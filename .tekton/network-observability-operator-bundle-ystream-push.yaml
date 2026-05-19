@@ -5,6 +5,7 @@ metadata:
     build.appstudio.openshift.io/repo: https://github.com/openshift/network-observability-operator?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
+    pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     # switch comment in/out at branch cut
     pipelinesascode.tekton.dev/on-cel-expression: |
@@ -19,7 +20,6 @@ metadata:
         "hack/patch_csv.py".pathChanged()
       )
     # pipelinesascode.tekton.dev/on-cel-expression: "false"
-  creationTimestamp: null
   labels:
     appstudio.openshift.io/application: netobserv-ystream
     appstudio.openshift.io/component: network-observability-operator-bundle-ystream
@@ -49,8 +49,7 @@ spec:
   workspaces:
   - name: workspace
     volumeClaimTemplate:
-      metadata:
-        creationTimestamp: null
+      metadata: {}
       spec:
         accessModes:
         - ReadWriteOnce
