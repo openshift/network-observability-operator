@@ -1,0 +1,28 @@
+version: "2"
+run:
+  go: "1.23"
+linters:
+  enable:
+    - copyloopvar
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+        - staticcheck
+        text: "QF1003:"
+      - linters:
+        - staticcheck
+        text: "QF1008:"
+formatters:
+  enable:
+    - gofmt

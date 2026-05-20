@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ipfix-collector
+  labels:
+    app: ipfix-collector
+  namespace: ipfix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ipfix-collector
+  template:
+    metadata:
+      labels:
+        app: ipfix-collector
+    spec:
+      containers:
+        - name: ipfix-collector
+          image: antrea/ipfix-collector:latest
+          args:
+          - "--ipfix.addr=0.0.0.0"
+          - "--ipfix.port=2055"
+          - "--ipfix.transport=tcp"
+          ports:
+            - containerPort: 2055
+              protocol: TCP
+              name: ipfix
+            - containerPort: 8080
+              protocol: TCP
+              name: http
+          imagePullPolicy: IfNotPresent
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ipfix-collector
+  labels:
+    app: ipfix-collector
+  namespace: ipfix
+spec:
+  ports:
+    - port: 2055
+      targetPort: 2055
+      protocol: TCP
+      name: ipfix
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: ipfix-collector
