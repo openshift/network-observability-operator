@@ -534,8 +534,11 @@ func (c *AgentController) envConfig(ctx context.Context, coll *flowslatest.FlowC
 				// Send to FLP service using TLS
 				caPath := c.volumes.AddVolume(ca, "netobserv-ca")
 				config = append(config, corev1.EnvVar{Name: envTargetTLSCACertPath, Value: caPath})
+				// Ideally, the certificate is installed in the privileged namespace already. Trust-manager can be used for that (used in the provided helm chart)
+				// In OpenShift, we currently don't assume that (trust-manager isn't available there at this time), so we'll copy it
+				assumeCertInstalled := !c.ClusterInfo.IsOpenShift()
 				if clientCert == nil {
-					if ca.Namespace != "" {
+					if ca.Namespace != "" && !assumeCertInstalled {
 						// Annotate pod with CA ref
 						caDigest, err := c.Watcher.ProcessFileReference(ctx, c.Client, *ca, c.PrivilegedNamespace())
 						if err != nil {
@@ -548,13 +551,15 @@ func (c *AgentController) envConfig(ctx context.Context, coll *flowslatest.FlowC
 					config = append(config, corev1.EnvVar{Name: envTargetTLSUserCertPath, Value: certPath})
 					config = append(config, corev1.EnvVar{Name: envTargetTLSUserKeyPath, Value: keyPath})
 
-					// Annotate pod with certificate reference so that it is reloaded if modified
-					caDigest, userDigest, err := c.Watcher.ProcessMTLSCertsFromRefs(ctx, c.Client, ca, clientCert, c.PrivilegedNamespace())
-					if err != nil {
-						return nil, err
+					if !assumeCertInstalled {
+						// Annotate pod with certificate reference so that it is reloaded if modified
+						caDigest, userDigest, err := c.Watcher.ProcessMTLSCertsFromRefs(ctx, c.Client, ca, clientCert, c.PrivilegedNamespace())
+						if err != nil {
+							return nil, err
+						}
+						annots[watchers.Annotation("mtls-ca")] = caDigest
+						annots[watchers.Annotation("mtls-user")] = userDigest
 					}
-					annots[watchers.Annotation("mtls-ca")] = caDigest
-					annots[watchers.Annotation("mtls-user")] = userDigest
 				}
 			}
 			config = append(config,
