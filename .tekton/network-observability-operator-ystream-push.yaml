@@ -16,6 +16,7 @@ metadata:
         "api/***".pathChanged() ||
         "internal/***".pathChanged() ||
         "Dockerfile.downstream".pathChanged() ||
+        "Dockerfile-args.downstream".pathChanged() ||
         "docs/***".pathChanged() ||
         "go.mod".pathChanged() ||
         "go.sum".pathChanged() ||
