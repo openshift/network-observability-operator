@@ -1,6 +1,6 @@
 # Do not remove comment lines, they are there to reduce conflicts
 # Operator
-export OPERATOR_IMAGE_PULLSPEC='registry.redhat.io/network-observability/network-observability-rhel9-operator@sha256:cc59a191af237a46d53377ccd447b654296f931d4b011123ba821603a610d327'
+export OPERATOR_IMAGE_PULLSPEC='registry.redhat.io/network-observability/network-observability-rhel9-operator@sha256:4e58273492d46a082419be6f8860d607c4eebb72d4e2043effb233a795b95652'
 # eBPF agent
 export EBPF_IMAGE_PULLSPEC='registry.redhat.io/network-observability/network-observability-ebpf-agent-rhel9@sha256:4e34233794ab7936a9ba1517cd645a3896bfd2397f7d2b4b77cecc1729e0f65f'
 # Flowlogs-pipeline
