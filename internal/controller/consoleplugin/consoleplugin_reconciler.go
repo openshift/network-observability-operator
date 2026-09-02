@@ -21,12 +21,8 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/controller/reconcilers"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
-	"github.com/netobserv/netobserv-operator/internal/pkg/resources"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
-
-// Type alias
-type pluginSpec = flowslatest.FlowCollectorConsolePlugin
 
 // CPReconciler reconciles the current console plugin state with the desired configuration
 type CPReconciler struct {
@@ -109,7 +105,7 @@ func (r *CPReconciler) reconcile(ctx context.Context, desired *flowslatest.FlowC
 		}
 
 		if hasPluginAPI {
-			if err = r.reconcilePlugin(ctx, &builder, &desired.Spec, constants.PluginName, "NetObserv plugin"); err != nil {
+			if err = r.reconcilePlugin(ctx, &builder, constants.PluginName, "NetObserv plugin"); err != nil {
 				return err
 			}
 		}
@@ -183,35 +179,13 @@ func (r *CPReconciler) reconcilePermissions(ctx context.Context, builder *builde
 		return r.CreateOwned(ctx, builder.serviceAccount(name))
 	} // update not needed for now
 
-	binding := resources.GetClusterRoleBinding(
-		r.Namespace,
-		constants.PluginShortName,
-		name,
-		name,
-		constants.ConsoleTokenReviewRole,
-	)
-	if err := r.ReconcileClusterRoleBinding(ctx, binding); err != nil {
-		return err
-	}
-	if builder.useStandalone {
-		// Currently, standalone mode uses service account token, not user token, for permissions.
-		// Add FlowCollector viewer role so that it can display the FC status icon.
-		binding := resources.GetClusterRoleBinding(
-			r.Namespace,
-			constants.PluginShortName,
-			name,
-			name,
-			constants.FlowCollectorViewerRole,
-		)
-		if err := r.ReconcileClusterRoleBinding(ctx, binding); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
-func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, desired *flowslatest.FlowCollectorSpec, name, displayName string) error {
-	// Console plugin is cluster-scope (it's not deployed in our namespace) however it must still be updated if our namespace changes
+func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, name, displayName string) error {
+	report := helper.NewChangeReport("ConsolePlugin")
+	defer report.LogIfNeeded(ctx)
+
 	oldPlg := osv1.ConsolePlugin{}
 	pluginExists := true
 	err := r.Get(ctx, types.NamespacedName{Name: name}, &oldPlg)
@@ -229,7 +203,7 @@ func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, de
 		if err := r.CreateOwned(ctx, consolePlugin); err != nil {
 			return err
 		}
-	} else if pluginNeedsUpdate(&oldPlg, &desired.ConsolePlugin) {
+	} else if helper.ConsolePluginChanged(&oldPlg, consolePlugin, &report) {
 		if err := r.UpdateIfOwned(ctx, &oldPlg, consolePlugin); err != nil {
 			return err
 		}
@@ -311,11 +285,6 @@ func (r *CPReconciler) reconcileHPA(ctx context.Context, builder *builder, desir
 		&desired.ConsolePlugin.Autoscaler,
 		&report,
 	)
-}
-
-func pluginNeedsUpdate(plg *osv1.ConsolePlugin, desired *pluginSpec) bool {
-	advancedConfig := helper.GetAdvancedPluginConfig(desired.Advanced)
-	return plg.Spec.Backend.Service.Port != *advancedConfig.Port
 }
 
 // getExternalRecordingAnnotations reads PrometheusRules with label netobserv=true and netobserv.io/network-health annotation.

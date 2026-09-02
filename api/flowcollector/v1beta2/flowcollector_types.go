@@ -27,6 +27,9 @@ const (
 // Defines the desired state of the FlowCollector resource.
 type FlowCollectorSpec struct {
 	// Namespace where NetObserv pods are deployed.
+	// Those pods require various cluster role bindings in order to operate. Those bindings are preinstalled for service accounts located in the default namespace.
+	// If you configured a different namespace, you must update (or recreate) the cluster role bindings accordingly.
+	// You can see the list of preinstalled bindings here: https://github.com/netobserv/netobserv-operator/blob/main/helm/templates/component_role_bindings.yaml
 	// +kubebuilder:default:=netobserv
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Namespace is immutable. If you need to change it, delete and recreate the resource."
 	Namespace string `json:"namespace,omitempty"`
@@ -416,6 +419,9 @@ type FlowCollectorKafka struct {
 
 	// TLS and mTLS client configuration. When using TLS, verify that the address matches the Kafka port used for TLS, generally 9093.
 	// We recommend the use of mTLS for higher security standards.
+	// When configuring TLS, the operator watches the certificate secret and copies it to both the netobserv and netobserv-privileged namespaces.
+	// In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+	// Refer to the Kafka configuration documentation for more information.
 	// +optional
 	TLS ClientTLS `json:"tls"`
 
@@ -559,9 +565,8 @@ type ClientServerTLS struct {
 	CAFile *FileReference `json:"caFile,omitempty"`
 }
 
-// `MetricsServerConfig` define the metrics server endpoint configuration for Prometheus scraper
+// `MetricsServerConfig` define the metrics server endpoint configuration for Prometheus scraper.
 type MetricsServerConfig struct {
-
 	//+kubebuilder:validation:Minimum=1
 	//+kubebuilder:validation:Maximum=65535
 	// The metrics server HTTP port.
@@ -570,10 +575,15 @@ type MetricsServerConfig struct {
 	// TLS configuration.
 	// +optional
 	TLS ServerTLS `json:"tls"`
+
+	// Prometheus scraping interval, how often metrics are pulled.
+	//+kubebuilder:validation:Format=duration
+	// +optional
+	ScrapeInterval *metav1.Duration `json:"scrapeInterval,omitempty"` // Warning: keep as pointer, else default is ignored
 }
 
 // Metric name. More information in https://github.com/netobserv/netobserv-operator/blob/main/docs/Metrics.md.
-// +kubebuilder:validation:Enum:="namespace_egress_bytes_total";"namespace_egress_packets_total";"namespace_ingress_bytes_total";"namespace_ingress_packets_total";"namespace_flows_total";"node_egress_bytes_total";"node_egress_packets_total";"node_ingress_bytes_total";"node_ingress_packets_total";"node_flows_total";"workload_egress_bytes_total";"workload_egress_packets_total";"workload_ingress_bytes_total";"workload_ingress_packets_total";"workload_flows_total";"namespace_drop_bytes_total";"namespace_drop_packets_total";"node_drop_bytes_total";"node_drop_packets_total";"workload_drop_bytes_total";"workload_drop_packets_total";"namespace_rtt_seconds";"node_rtt_seconds";"workload_rtt_seconds";"namespace_dns_latency_seconds";"node_dns_latency_seconds";"workload_dns_latency_seconds";"node_network_policy_events_total";"namespace_network_policy_events_total";"workload_network_policy_events_total";"node_ipsec_flows_total";"namespace_ipsec_flows_total";"workload_ipsec_flows_total";"node_tls_flows_total";"namespace_tls_flows_total";"workload_tls_flows_total";"node_to_node_ingress_flows_total"
+// +kubebuilder:validation:Enum:="namespace_egress_bytes_total";"namespace_egress_packets_total";"namespace_ingress_bytes_total";"namespace_ingress_packets_total";"namespace_flows_total";"node_egress_bytes_total";"node_egress_packets_total";"node_ingress_bytes_total";"node_ingress_packets_total";"node_flows_total";"workload_egress_bytes_total";"workload_egress_packets_total";"workload_ingress_bytes_total";"workload_ingress_packets_total";"workload_flows_total";"namespace_drop_bytes_total";"namespace_drop_packets_total";"node_drop_bytes_total";"node_drop_packets_total";"workload_drop_bytes_total";"workload_drop_packets_total";"namespace_rtt_seconds";"node_rtt_seconds";"workload_rtt_seconds";"namespace_dns_latency_seconds";"node_dns_latency_seconds";"workload_dns_latency_seconds";"namespace_dns_flows_total";"node_dns_flows_total";"workload_dns_flows_total";"node_network_policy_events_total";"namespace_network_policy_events_total";"workload_network_policy_events_total";"node_ipsec_flows_total";"namespace_ipsec_flows_total";"workload_ipsec_flows_total";"node_tls_flows_total";"namespace_tls_flows_total";"workload_tls_flows_total";"node_to_node_ingress_flows_total"
 type FLPMetric string
 
 // `FLPMetrics` define the desired FLP configuration regarding metrics
@@ -589,7 +599,7 @@ type FLPMetrics struct {
 	// Metrics enabled by default are:
 	// `namespace_flows_total`, `node_ingress_bytes_total`, `node_egress_bytes_total`, `workload_ingress_bytes_total`,
 	// `workload_egress_bytes_total`, `namespace_drop_packets_total` (when `PacketDrop` feature is enabled),
-	// `namespace_rtt_seconds` (when `FlowRTT` feature is enabled), `namespace_dns_latency_seconds` (when `DNSTracking` feature is enabled),
+	// `namespace_rtt_seconds` (when `FlowRTT` feature is enabled), `namespace_dns_latency_seconds` and `namespace_dns_flows_total` (when `DNSTracking` feature is enabled),
 	// `namespace_network_policy_events_total` (when `NetworkEvents` feature is enabled).
 	// More information, with full list of available metrics: https://github.com/netobserv/netobserv-operator/blob/main/docs/Metrics.md
 	// +optional
@@ -1022,6 +1032,9 @@ type LokiStackRef struct {
 	Name string `json:"name,omitempty"`
 
 	// Namespace where this `LokiStack` resource is located. If omitted, it is assumed to be the same as `spec.namespace`.
+	// When configuring a different namespace, the operator watches certificate secret and copies it to the netobserv main namespaces.
+	// In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+	// Refer to the Loki configuration documentation for more information.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }

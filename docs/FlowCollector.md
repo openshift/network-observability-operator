@@ -144,7 +144,10 @@ Kafka can provide better scalability, resiliency, and high availability (for mor
         <td><b>namespace</b></td>
         <td>string</td>
         <td>
-          Namespace where NetObserv pods are deployed.<br/>
+          Namespace where NetObserv pods are deployed.
+Those pods require various cluster role bindings in order to operate. Those bindings are preinstalled for service accounts located in the default namespace.
+If you configured a different namespace, you must update (or recreate) the cluster role bindings accordingly.
+You can see the list of preinstalled bindings here: https://github.com/netobserv/netobserv-operator/blob/main/helm/templates/component_role_bindings.yaml<br/>
           <br/>
             <i>Validations</i>:<li>self == oldSelf: Namespace is immutable. If you need to change it, delete and recreate the resource.</li>
             <i>Default</i>: netobserv<br/>
@@ -2551,6 +2554,15 @@ Metrics server endpoint configuration for the Prometheus scraper.
             <i>Format</i>: int32<br/>
             <i>Minimum</i>: 1<br/>
             <i>Maximum</i>: 65535<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>scrapeInterval</b></td>
+        <td>string</td>
+        <td>
+          Prometheus scraping interval, how often metrics are pulled.<br/>
+          <br/>
+            <i>Format</i>: duration<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -6210,7 +6222,10 @@ Accepted values are: `none` (default), `gzip`, `snappy`, `lz4`, `zstd`.<br/>
         <td>object</td>
         <td>
           TLS and mTLS client configuration. When using TLS, verify that the address matches the Kafka port used for TLS, generally 9093.
-We recommend the use of mTLS for higher security standards.<br/>
+We recommend the use of mTLS for higher security standards.
+When configuring TLS, the operator watches the certificate secret and copies it to both the netobserv and netobserv-privileged namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Kafka configuration documentation for more information.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -6374,6 +6389,9 @@ If the namespace is different, the config map or the secret is copied so that it
 
 TLS and mTLS client configuration. When using TLS, verify that the address matches the Kafka port used for TLS, generally 9093.
 We recommend the use of mTLS for higher security standards.
+When configuring TLS, the operator watches the certificate secret and copies it to both the netobserv and netobserv-privileged namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Kafka configuration documentation for more information.
 
 <table>
     <thead>
@@ -6963,7 +6981,10 @@ Accepted values are: `none` (default), `gzip`, `snappy`, `lz4`, `zstd`.<br/>
         <td>object</td>
         <td>
           TLS and mTLS client configuration. When using TLS, verify that the address matches the Kafka port used for TLS, generally 9093.
-We recommend the use of mTLS for higher security standards.<br/>
+We recommend the use of mTLS for higher security standards.
+When configuring TLS, the operator watches the certificate secret and copies it to both the netobserv and netobserv-privileged namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Kafka configuration documentation for more information.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -7127,6 +7148,9 @@ If the namespace is different, the config map or the secret is copied so that it
 
 TLS and mTLS client configuration. When using TLS, verify that the address matches the Kafka port used for TLS, generally 9093.
 We recommend the use of mTLS for higher security standards.
+When configuring TLS, the operator watches the certificate secret and copies it to both the netobserv and netobserv-privileged namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Kafka configuration documentation for more information.
 
 <table>
     <thead>
@@ -7520,7 +7544,10 @@ It is ignored for other modes.
         <td><b>namespace</b></td>
         <td>string</td>
         <td>
-          Namespace where this `LokiStack` resource is located. If omitted, it is assumed to be the same as `spec.namespace`.<br/>
+          Namespace where this `LokiStack` resource is located. If omitted, it is assumed to be the same as `spec.namespace`.
+When configuring a different namespace, the operator watches certificate secret and copies it to the netobserv main namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Loki configuration documentation for more information.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -12137,7 +12164,7 @@ The names correspond to the names in Prometheus without the prefix. For example,
 Note that the more metrics you add, the bigger is the impact on Prometheus workload resources.
 More information, with full list of available metrics: https://github.com/netobserv/netobserv-operator/blob/main/docs/Metrics.md<br/>
           <br/>
-            <i>Enum</i>: namespace_egress_bytes_total, namespace_egress_packets_total, namespace_ingress_bytes_total, namespace_ingress_packets_total, namespace_flows_total, node_egress_bytes_total, node_egress_packets_total, node_ingress_bytes_total, node_ingress_packets_total, node_flows_total, workload_egress_bytes_total, workload_egress_packets_total, workload_ingress_bytes_total, workload_ingress_packets_total, workload_flows_total, namespace_drop_bytes_total, namespace_drop_packets_total, node_drop_bytes_total, node_drop_packets_total, workload_drop_bytes_total, workload_drop_packets_total, namespace_rtt_seconds, node_rtt_seconds, workload_rtt_seconds, namespace_dns_latency_seconds, node_dns_latency_seconds, workload_dns_latency_seconds, node_network_policy_events_total, namespace_network_policy_events_total, workload_network_policy_events_total, node_ipsec_flows_total, namespace_ipsec_flows_total, workload_ipsec_flows_total, node_tls_flows_total, namespace_tls_flows_total, workload_tls_flows_total, node_to_node_ingress_flows_total<br/>
+            <i>Enum</i>: namespace_egress_bytes_total, namespace_egress_packets_total, namespace_ingress_bytes_total, namespace_ingress_packets_total, namespace_flows_total, node_egress_bytes_total, node_egress_packets_total, node_ingress_bytes_total, node_ingress_packets_total, node_flows_total, workload_egress_bytes_total, workload_egress_packets_total, workload_ingress_bytes_total, workload_ingress_packets_total, workload_flows_total, namespace_drop_bytes_total, namespace_drop_packets_total, node_drop_bytes_total, node_drop_packets_total, workload_drop_bytes_total, workload_drop_packets_total, namespace_rtt_seconds, node_rtt_seconds, workload_rtt_seconds, namespace_dns_latency_seconds, node_dns_latency_seconds, workload_dns_latency_seconds, namespace_dns_flows_total, node_dns_flows_total, workload_dns_flows_total, node_network_policy_events_total, namespace_network_policy_events_total, workload_network_policy_events_total, node_ipsec_flows_total, namespace_ipsec_flows_total, workload_ipsec_flows_total, node_tls_flows_total, namespace_tls_flows_total, workload_tls_flows_total, node_to_node_ingress_flows_total<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -12170,11 +12197,11 @@ Note that the more metrics you add, the bigger is the impact on Prometheus workl
 Metrics enabled by default are:
 `namespace_flows_total`, `node_ingress_bytes_total`, `node_egress_bytes_total`, `workload_ingress_bytes_total`,
 `workload_egress_bytes_total`, `namespace_drop_packets_total` (when `PacketDrop` feature is enabled),
-`namespace_rtt_seconds` (when `FlowRTT` feature is enabled), `namespace_dns_latency_seconds` (when `DNSTracking` feature is enabled),
+`namespace_rtt_seconds` (when `FlowRTT` feature is enabled), `namespace_dns_latency_seconds` and `namespace_dns_flows_total` (when `DNSTracking` feature is enabled),
 `namespace_network_policy_events_total` (when `NetworkEvents` feature is enabled).
 More information, with full list of available metrics: https://github.com/netobserv/netobserv-operator/blob/main/docs/Metrics.md<br/>
           <br/>
-            <i>Enum</i>: namespace_egress_bytes_total, namespace_egress_packets_total, namespace_ingress_bytes_total, namespace_ingress_packets_total, namespace_flows_total, node_egress_bytes_total, node_egress_packets_total, node_ingress_bytes_total, node_ingress_packets_total, node_flows_total, workload_egress_bytes_total, workload_egress_packets_total, workload_ingress_bytes_total, workload_ingress_packets_total, workload_flows_total, namespace_drop_bytes_total, namespace_drop_packets_total, node_drop_bytes_total, node_drop_packets_total, workload_drop_bytes_total, workload_drop_packets_total, namespace_rtt_seconds, node_rtt_seconds, workload_rtt_seconds, namespace_dns_latency_seconds, node_dns_latency_seconds, workload_dns_latency_seconds, node_network_policy_events_total, namespace_network_policy_events_total, workload_network_policy_events_total, node_ipsec_flows_total, namespace_ipsec_flows_total, workload_ipsec_flows_total, node_tls_flows_total, namespace_tls_flows_total, workload_tls_flows_total, node_to_node_ingress_flows_total<br/>
+            <i>Enum</i>: namespace_egress_bytes_total, namespace_egress_packets_total, namespace_ingress_bytes_total, namespace_ingress_packets_total, namespace_flows_total, node_egress_bytes_total, node_egress_packets_total, node_ingress_bytes_total, node_ingress_packets_total, node_flows_total, workload_egress_bytes_total, workload_egress_packets_total, workload_ingress_bytes_total, workload_ingress_packets_total, workload_flows_total, namespace_drop_bytes_total, namespace_drop_packets_total, node_drop_bytes_total, node_drop_packets_total, workload_drop_bytes_total, workload_drop_packets_total, namespace_rtt_seconds, node_rtt_seconds, workload_rtt_seconds, namespace_dns_latency_seconds, node_dns_latency_seconds, workload_dns_latency_seconds, namespace_dns_flows_total, node_dns_flows_total, workload_dns_flows_total, node_network_policy_events_total, namespace_network_policy_events_total, workload_network_policy_events_total, node_ipsec_flows_total, namespace_ipsec_flows_total, workload_ipsec_flows_total, node_tls_flows_total, namespace_tls_flows_total, workload_tls_flows_total, node_to_node_ingress_flows_total<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -12382,6 +12409,15 @@ Metrics server endpoint configuration for Prometheus scraper
             <i>Format</i>: int32<br/>
             <i>Minimum</i>: 1<br/>
             <i>Maximum</i>: 65535<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>scrapeInterval</b></td>
+        <td>string</td>
+        <td>
+          Prometheus scraping interval, how often metrics are pulled.<br/>
+          <br/>
+            <i>Format</i>: duration<br/>
         </td>
         <td>false</td>
       </tr><tr>

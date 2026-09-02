@@ -6,17 +6,14 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
 	sliceslatest "github.com/netobserv/netobserv-operator/api/flowcollectorslice/v1alpha1"
 	metricslatest "github.com/netobserv/netobserv-operator/api/flowmetrics/v1alpha1"
-	"github.com/netobserv/netobserv-operator/internal/controller/constants"
 	"github.com/netobserv/netobserv-operator/internal/controller/reconcilers"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
-	"github.com/netobserv/netobserv-operator/internal/pkg/resources"
 )
 
 const (
@@ -27,16 +24,16 @@ const (
 type informerReconciler struct {
 	*reconcilers.Instance
 	deployment     *appsv1.Deployment
+	service        *corev1.Service
 	serviceAccount *corev1.ServiceAccount
-	rbInformer     *rbacv1.ClusterRoleBinding
 }
 
 func newInformerReconciler(cmn *reconcilers.Instance) *informerReconciler {
 	rec := informerReconciler{
 		Instance:       cmn,
 		deployment:     cmn.Managed.NewDeployment(informerName),
+		service:        cmn.Managed.NewService(k8sCacheServiceName),
 		serviceAccount: cmn.Managed.NewServiceAccount(informerName),
-		rbInformer:     cmn.Managed.NewCRB(resources.GetClusterRoleBindingName(informerShortName, constants.FLPInformersRole)),
 	}
 	return &rec
 }
@@ -79,9 +76,10 @@ func (r *informerReconciler) reconcile(ctx context.Context, desired *flowslatest
 		return fmt.Errorf("failed to reconcile service account: %w", err)
 	}
 
-	// Reconcile RBAC
-	if err := r.reconcilePermissions(ctx); err != nil {
-		return fmt.Errorf("failed to reconcile permissions: %w", err)
+	// Reconcile k8scache Service (targets processor pods, managed here so certificates
+	// are always driven by informerCacheProxy config regardless of deployment model)
+	if err := r.reconcileService(ctx, &builder); err != nil {
+		return fmt.Errorf("failed to reconcile k8scache service: %w", err)
 	}
 
 	// Reconcile Deployment
@@ -102,12 +100,10 @@ func (r *informerReconciler) reconcileServiceAccount(ctx context.Context, builde
 	return nil
 }
 
-func (r *informerReconciler) reconcilePermissions(ctx context.Context) error {
-	r.rbInformer = resources.GetClusterRoleBinding(r.Namespace, informerShortName, informerName, informerName, constants.FLPInformersRole)
-	if err := r.ReconcileClusterRoleBinding(ctx, r.rbInformer); err != nil {
-		return fmt.Errorf("failed to reconcile cluster role binding: %w", err)
-	}
-	return nil
+func (r *informerReconciler) reconcileService(ctx context.Context, builder *informerBuilder) error {
+	report := helper.NewChangeReport("k8scache Service")
+	defer report.LogIfNeeded(ctx)
+	return r.ReconcileService(ctx, r.service, builder.service(), &report)
 }
 
 func (r *informerReconciler) reconcileDeployment(ctx context.Context, builder *informerBuilder) error {

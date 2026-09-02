@@ -34,7 +34,6 @@ const (
 	monoShortName               = constants.FLPShortName
 	transfoShortName            = constants.FLPShortName + "transfo"
 	informerName                = "flowlogs-pipeline-informers"
-	informerShortName           = "informers"
 )
 
 var (
@@ -65,13 +64,12 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 		Name:      informerName,
 		Namespace: operatorNamespace,
 	}
+	k8sCacheServiceKey := types.NamespacedName{
+		Name:      "flowlogs-pipeline-k8scache",
+		Namespace: operatorNamespace,
+	}
 	rbKeyConfigWatcherMono := types.NamespacedName{Name: resources.GetRoleBindingName(monoShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
-	rbKeyHostNetworkMono := types.NamespacedName{Name: resources.GetClusterRoleBindingName(monoShortName, constants.HostNetworkRole)}
-	rbKeyLokiWriterMono := types.NamespacedName{Name: resources.GetClusterRoleBindingName(monoShortName, constants.LokiWriterRole)}
 	rbKeyConfigWatcherTransfo := types.NamespacedName{Name: resources.GetRoleBindingName(transfoShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
-	rbKeyHostNetworkTransfo := types.NamespacedName{Name: resources.GetClusterRoleBindingName(transfoShortName, constants.HostNetworkRole)}
-	rbKeyLokiWriterTransfo := types.NamespacedName{Name: resources.GetClusterRoleBindingName(transfoShortName, constants.LokiWriterRole)}
-	rbKeyInformer := types.NamespacedName{Name: resources.GetClusterRoleBindingName(informerShortName, constants.FLPInformersRole)}
 
 	// Created objects to cleanup
 	cleanupList := []client.Object{}
@@ -145,7 +143,7 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 				return svcAcc.Labels != nil && svcAcc.Labels["app"] == constants.FLPName
 			}))
 
-			By("Expecting to create two flowlogs-pipeline role bindings")
+			By("Expecting to create flowlogs-pipeline role binding")
 			rb1 := rbacv1.RoleBinding{}
 			Eventually(func() interface{} {
 				return k8sClient.Get(ctx, rbKeyConfigWatcherMono, &rb1)
@@ -154,39 +152,10 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 			Expect(rb1.Subjects[0].Name).Should(Equal("flowlogs-pipeline"))
 			Expect(rb1.RoleRef.Name).Should(Equal("netobserv-config-watcher"))
 
-			if env == test.EnvOpenShift {
-				rb2 := rbacv1.ClusterRoleBinding{}
-				Eventually(func() interface{} {
-					return k8sClient.Get(ctx, rbKeyHostNetworkMono, &rb2)
-				}, timeout, interval).Should(Succeed())
-				Expect(rb2.Subjects).Should(HaveLen(1))
-				Expect(rb2.Subjects[0].Name).Should(Equal("flowlogs-pipeline"))
-				Expect(rb2.RoleRef.Name).Should(Equal("netobserv-hostnetwork"))
-			}
-
-			rb3 := rbacv1.ClusterRoleBinding{}
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, rbKeyInformer, &rb3)
-			}, timeout, interval).Should(Succeed())
-			Expect(rb3.Subjects).Should(HaveLen(1))
-			Expect(rb3.Subjects[0].Name).Should(Equal("flowlogs-pipeline-informers"))
-			Expect(rb3.RoleRef.Name).Should(Equal("netobserv-informers"))
-
-			By("Not expecting Loki role (requires LokiStack)")
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, rbKeyLokiWriterMono, &rbacv1.ClusterRoleBinding{})
-			}, timeout, interval).Should(MatchError(`clusterrolebindings.rbac.authorization.k8s.io "netobserv-loki-writer-flp" not found`))
-
 			By("Not expecting transformer role bindings")
 			Eventually(func() interface{} {
 				return k8sClient.Get(ctx, rbKeyConfigWatcherTransfo, &rbacv1.RoleBinding{})
 			}, timeout, interval).Should(MatchError(`rolebindings.rbac.authorization.k8s.io "netobserv-config-watcher-flptransfo" not found`))
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, rbKeyHostNetworkTransfo, &rbacv1.ClusterRoleBinding{})
-			}, timeout, interval).Should(MatchError(`clusterrolebindings.rbac.authorization.k8s.io "netobserv-hostnetwork-flptransfo" not found`))
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, rbKeyLokiWriterTransfo, &rbacv1.ClusterRoleBinding{})
-			}, timeout, interval).Should(MatchError(`clusterrolebindings.rbac.authorization.k8s.io "netobserv-loki-writer-flptransfo" not found`))
 
 			By("Expecting flowlogs-pipeline-config configmap to be created")
 			Eventually(func() interface{} {
@@ -197,16 +166,21 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 				}, &cm)
 			}, timeout, interval).Should(Succeed())
 
-			By("Expecting to create the flowlogs-pipeline Service, even in Direct mode, because informers are enabled")
-			svc := v1.Service{}
+			By("Not expecting the monolith Service in Direct mode (k8scache has its own service)")
 			Eventually(func() error {
-				return k8sClient.Get(ctx, flpKey1, &svc)
+				return k8sClient.Get(ctx, flpKey1, &v1.Service{})
+			}, timeout, interval).ShouldNot(Succeed())
+
+			By("Expecting the dedicated k8scache Service to be created by the informer reconciler")
+			k8sCacheSvc := v1.Service{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, k8sCacheServiceKey, &k8sCacheSvc)
 			}, timeout, interval).Should(Succeed())
-			Expect(svc.Spec.Ports).To(HaveLen(1))
-			Expect(svc.Spec.Ports[0].Name).To(Equal("k8scache"))
+			Expect(k8sCacheSvc.Spec.Ports).To(HaveLen(1))
+			Expect(k8sCacheSvc.Spec.Ports[0].Name).To(Equal("k8scache"))
 			if env == test.EnvOpenShift {
-				By("Expecting the Service to request a serving certificate for the k8scache TLS server")
-				Expect(svc.Annotations[constants.OpenShiftCertificateAnnotation]).To(Equal("flowlogs-pipeline-cert"))
+				By("Expecting the k8scache Service to request a serving certificate")
+				Expect(k8sCacheSvc.Annotations[constants.OpenShiftCertificateAnnotation]).To(Equal("flowlogs-pipeline-k8scache-cert"))
 			}
 		})
 
@@ -332,16 +306,22 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 				return k8sClient.Get(ctx, flpKeyKafkaTransformer, &appsv1.Deployment{})
 			}, timeout, interval).Should(Succeed())
 
-			By("Expecting transformer service to be created for k8scache (informers enabled)")
-			svc := v1.Service{}
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, flpKeyKafkaTransformer, &svc)
-			}, timeout, interval).Should(Succeed())
-			Expect(svc.Spec.Ports).Should(HaveLen(1))
-			Expect(svc.Spec.Ports[0].Name).Should(Equal("k8scache"))
-			Expect(svc.Spec.Ports[0].Port).Should(Equal(flowslatest.DefaultK8sCachePort))
+			By("Not expecting transformer service (k8scache has its own dedicated service)")
+			Eventually(func() error {
+				return k8sClient.Get(ctx, flpKeyKafkaTransformer, &v1.Service{})
+			}, timeout, interval).ShouldNot(Succeed())
 
-			By("Expecting to create transformer flowlogs-pipeline role bindings")
+			By("Expecting the k8scache service to target transformer pods in Kafka mode")
+			k8sCacheSvc := v1.Service{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, k8sCacheServiceKey, &k8sCacheSvc)
+			}, timeout, interval).Should(Succeed())
+			Expect(k8sCacheSvc.Spec.Ports).Should(HaveLen(1))
+			Expect(k8sCacheSvc.Spec.Ports[0].Name).Should(Equal("k8scache"))
+			Expect(k8sCacheSvc.Spec.Ports[0].Port).Should(Equal(flowslatest.DefaultK8sCachePort))
+			Expect(k8sCacheSvc.Spec.Selector["app"]).Should(Equal(constants.FLPTransfoName))
+
+			By("Expecting to create transformer flowlogs-pipeline role binding")
 			rb1 := rbacv1.RoleBinding{}
 			Eventually(func() interface{} {
 				return k8sClient.Get(ctx, rbKeyConfigWatcherTransfo, &rb1)
@@ -350,35 +330,10 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 			Expect(rb1.Subjects[0].Name).Should(Equal("flowlogs-pipeline-transformer"))
 			Expect(rb1.RoleRef.Name).Should(Equal("netobserv-config-watcher"))
 
-			By("Expecting informer role binding (independent deployment)")
-			rb2 := rbacv1.ClusterRoleBinding{}
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, rbKeyInformer, &rb2)
-			}, timeout, interval).Should(Succeed())
-			Expect(rb2.Subjects).Should(HaveLen(1))
-			Expect(rb2.Subjects[0].Name).Should(Equal("flowlogs-pipeline-informers"))
-			Expect(rb2.RoleRef.Name).Should(Equal("netobserv-informers"))
-
-			By("Not expecting hostnetwork role (not needed with Kafka)")
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, rbKeyHostNetworkTransfo, &rbacv1.ClusterRoleBinding{})
-			}, timeout, interval).Should(MatchError(`clusterrolebindings.rbac.authorization.k8s.io "netobserv-hostnetwork-flptransfo" not found`))
-
-			By("Not expecting Loki role (requires LokiStack)")
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, rbKeyLokiWriterTransfo, &rbacv1.ClusterRoleBinding{})
-			}, timeout, interval).Should(MatchError(`clusterrolebindings.rbac.authorization.k8s.io "netobserv-loki-writer-flptransfo" not found`))
-
 			By("Not expecting mono role bindings")
 			Eventually(func() interface{} {
 				return k8sClient.Get(ctx, rbKeyConfigWatcherMono, &rbacv1.RoleBinding{})
 			}, timeout, interval).Should(MatchError(`rolebindings.rbac.authorization.k8s.io "netobserv-config-watcher-flp" not found`))
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, rbKeyHostNetworkMono, &rbacv1.ClusterRoleBinding{})
-			}, timeout, interval).Should(MatchError(`clusterrolebindings.rbac.authorization.k8s.io "netobserv-hostnetwork-flp" not found`))
-			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, rbKeyLokiWriterMono, &rbacv1.ClusterRoleBinding{})
-			}, timeout, interval).Should(MatchError(`clusterrolebindings.rbac.authorization.k8s.io "netobserv-loki-writer-flp" not found`))
 		})
 
 		It("Should delete previous flp deployment", func() {
@@ -818,14 +773,6 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 				}
 				return hasConfig && hasFlp && hasLokiCert
 			}, timeout, interval).Should(BeTrue())
-		})
-
-		It("Should deploy Loki roles", func() {
-			By("Expecting FLP Writer ClusterRoleBinding")
-			Eventually(func() interface{} {
-				var crb rbacv1.ClusterRoleBinding
-				return k8sClient.Get(ctx, rbKeyLokiWriterMono, &crb)
-			}, timeout, interval).Should(Succeed())
 		})
 
 		It("Should restore no TLS config in manual mode", func() {

@@ -99,8 +99,8 @@ func podTemplate(
 	desired *flowslatest.FlowCollectorSpec,
 	vols *volumes.Builder,
 	netType flowNetworkType,
-	certSecretName string,
 	annotations map[string]string,
+	isOpenShift bool,
 ) corev1.PodTemplateSpec {
 	advancedConfig := helper.GetAdvancedProcessorConfig(desired)
 	var ports []corev1.ContainerPort
@@ -164,7 +164,10 @@ func podTemplate(
 	args := []string{
 		fmt.Sprintf(`--config=%s/%s`, configPath, configFile),
 	}
-	addK8sCacheArgs(desired, vols, certSecretName, &args)
+
+	if desired.Processor.IsInformerCacheProxyEnabled() {
+		addK8sCacheArgs(desired, vols, &args, isOpenShift)
+	}
 
 	// Extract volumes and mounts AFTER all volume modifications are done
 	volumeMounts := vols.AppendMounts([]corev1.VolumeMount{{
@@ -287,42 +290,20 @@ func metricsSettings(desired *flowslatest.FlowCollectorSpec, vol *volumes.Builde
 	return metricsSettings
 }
 
-// addK8sCacheArgs adds k8scache server arguments for centralized informers
-func addK8sCacheArgs(desired *flowslatest.FlowCollectorSpec, vols *volumes.Builder, certSecretName string, args *[]string) {
-	if desired.Processor.InformerCacheProxy == nil || desired.Processor.InformerCacheProxy.Enabled == nil || !*desired.Processor.InformerCacheProxy.Enabled {
-		return
-	}
-
+// addK8sCacheArgs adds k8scache server arguments for centralized informers.
+// k8scache always uses a dedicated service (managed by the informer reconciler) with its own
+// certificates, so there are no special cases per deployment model or service TLS configuration.
+func addK8sCacheArgs(desired *flowslatest.FlowCollectorSpec, vols *volumes.Builder, args *[]string, isOpenShift bool) {
 	*args = append(*args,
 		fmt.Sprintf("--k8scache.port=%d", desired.Processor.GetK8sCachePort()),
 		"--k8scache.address=0.0.0.0",
 	)
 
-	tlsType := desired.Processor.InformerCacheProxy.GetTLSType()
-
-	if tlsType == flowslatest.TLSDisabled {
-		return
-	}
-
-	var serverCert *flowslatest.CertificateReference
-	var caFile *flowslatest.FileReference
-
-	if tlsType == flowslatest.TLSProvided {
-		// Manual mode: user provides certificates
-		if desired.Processor.InformerCacheProxy.TLS != nil && desired.Processor.InformerCacheProxy.TLS.ProvidedCertificates != nil {
-			serverCert = desired.Processor.InformerCacheProxy.TLS.ProvidedCertificates.ServerCert
-			caFile = desired.Processor.InformerCacheProxy.TLS.ProvidedCertificates.CAFile
-		}
-	} else if tlsType == flowslatest.TLSAuto || tlsType == flowslatest.TLSAutoMTLS {
-		// Auto mode: use service-ca certificate for the k8scache service
-		serverCert = helper.DefaultCertificateReference(certSecretName, "")
-		if tlsType == flowslatest.TLSAutoMTLS {
-			caFile = helper.DefaultCAReference("netobserv-ca", "")
-		}
-	}
+	svcConfig := helper.InformerTLSAsServiceConfig(desired.Processor.InformerCacheProxy)
+	serverCert, caFile := helper.GetServiceServerTLSConfig(svcConfig, k8sCacheCertSecretName, isOpenShift)
 
 	if serverCert != nil {
-		certPath, keyPath := vols.AddCertificate(serverCert, "svc-certs")
+		certPath, keyPath := vols.AddCertificate(serverCert, "k8scache-certs")
 		*args = append(*args,
 			"--k8scache.tls-enabled=true",
 			fmt.Sprintf("--k8scache.tls-cert-path=%s", certPath),
@@ -412,6 +393,10 @@ func serviceMonitor(desired *flowslatest.FlowCollectorSpec, smName, svcName, nam
 	if useEndpointSlices {
 		sdRole = ptr.To(monitoringv1.EndpointSliceRole)
 	}
+	interval := "15s"
+	if desired.Processor.Metrics.Server.ScrapeInterval != nil {
+		interval = desired.Processor.Metrics.Server.ScrapeInterval.String()
+	}
 	return &monitoringv1.ServiceMonitor{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      smName,
@@ -427,7 +412,7 @@ func serviceMonitor(desired *flowslatest.FlowCollectorSpec, smName, svcName, nam
 			Endpoints: []monitoringv1.Endpoint{
 				{
 					Port:        prometheusPortName,
-					Interval:    "15s",
+					Interval:    monitoringv1.Duration(interval),
 					Scheme:      &scheme,
 					TLSConfig:   smTLS,
 					HonorLabels: true,

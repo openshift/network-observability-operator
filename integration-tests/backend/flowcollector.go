@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strings"
 	"time"
 
-	exutil "github.com/openshift/origin/test/extended/util"
-	compat_otp "github.com/openshift/origin/test/extended/util/compat_otp"
+	o "github.com/onsi/gomega"
+
 	"golang.org/x/mod/semver"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	e2e "k8s.io/kubernetes/test/e2e/framework"
@@ -27,8 +29,8 @@ type Flowcollector struct {
 	LokiEnable                        string
 	LokiMode                          string
 	LokiNamespace                     string
-	InstallDemoLoki                   string
 	MonolithicLokiURL                 string
+	InstallDemoLoki                   string
 	KafkaAddress                      string
 	KafkaTLSEnable                    string
 	KafkaClusterName                  string
@@ -178,7 +180,7 @@ type Lokilabels struct {
 }
 
 // create flowcollector CRD for a given manifest file
-func (flow Flowcollector) CreateFlowcollector(oc *exutil.CLI) {
+func (flow Flowcollector) CreateFlowcollector() {
 	parameters := []string{"--ignore-unknown-parameters=true", "-f", flow.Template, "-p"}
 
 	flowCollector := reflect.ValueOf(&flow).Elem()
@@ -191,59 +193,177 @@ func (flow Flowcollector) CreateFlowcollector(oc *exutil.CLI) {
 		}
 	}
 
-	compat_otp.ApplyNsResourceFromTemplate(oc, flow.Namespace, parameters...)
-	flow.WaitForFlowcollectorReady(oc)
+	err := applyNsResourceFromTemplateByAdmin(flow.Namespace, parameters...)
+	o.Expect(err).NotTo(o.HaveOccurred())
+
+	flow.createRoleBindings()
+
+	flow.WaitForFlowcollectorReady()
 }
 
-// delete flowcollector CRD from a cluster
-func (flow *Flowcollector) DeleteFlowcollector(oc *exutil.CLI) error {
-	return oc.AsAdmin().WithoutNamespace().Run("delete").Args("flowcollector", "cluster").Execute()
+// createSecretWatcherRB creates a secret-watcher RoleBinding in the given
+// namespace so the operator can watch secrets there. Call this when deploying
+// external resources (Kafka, LokiStack) so the RoleBinding is ready before
+// the FlowCollector CR is created.
+func createSecretWatcherRB(namespace string) {
+	_, err := k8sClient.RbacV1().RoleBindings(namespace).Create(context.Background(), &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "secret-watcher", Namespace: namespace},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "netobserv-secret-watcher"},
+		Subjects: []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      "netobserv-controller-manager",
+			Namespace: netobservNS,
+		}},
+	}, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return
+	}
+	o.Expect(err).NotTo(o.HaveOccurred())
 }
 
-func (flow *Flowcollector) WaitForFlowcollectorReady(oc *exutil.CLI) {
+func (flow Flowcollector) createRoleBindings() {
+	operatorSA := rbacv1.Subject{
+		Kind:      "ServiceAccount",
+		Name:      "netobserv-controller-manager",
+		Namespace: netobservNS,
+	}
+
+	componentCRBs := []struct {
+		name        string
+		clusterRole string
+		sa          string
+	}{
+		{"netobserv-informers-flp-" + flow.Namespace, "netobserv-informers", "flowlogs-pipeline"},
+		{"netobserv-informers-flpinformers-" + flow.Namespace, "netobserv-informers", "flowlogs-pipeline-informers"},
+		{"netobserv-hostnetwork-flp-" + flow.Namespace, "netobserv-hostnetwork", "flowlogs-pipeline"},
+		{"netobserv-loki-writer-flp-" + flow.Namespace, "netobserv-loki-writer", "flowlogs-pipeline"},
+		{"netobserv-informers-flptransfo-" + flow.Namespace, "netobserv-informers", "flowlogs-pipeline-transformer"},
+		{"netobserv-loki-writer-flptransfo-" + flow.Namespace, "netobserv-loki-writer", "flowlogs-pipeline-transformer"},
+		{"netobserv-token-review-plugin-" + flow.Namespace, "netobserv-token-review", "netobserv-plugin"},
+	}
+	for _, crb := range componentCRBs {
+		_, err := k8sClient.RbacV1().ClusterRoleBindings().Create(context.Background(), &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: crb.name},
+			RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: crb.clusterRole},
+			Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: crb.sa, Namespace: flow.Namespace}},
+		}, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			continue
+		}
+		o.Expect(err).NotTo(o.HaveOccurred())
+	}
+
+	privNS := flow.Namespace + "-privileged"
+	err := wait.PollUntilContextTimeout(context.Background(), 5*time.Second, 120*time.Second, false, func(ctx context.Context) (bool, error) {
+		_, nsErr := k8sClient.CoreV1().Namespaces().Get(ctx, privNS, metav1.GetOptions{})
+		if nsErr == nil {
+			return true, nil
+		}
+		if apierrors.IsNotFound(nsErr) {
+			return false, nil
+		}
+		return false, nsErr
+	})
+	o.Expect(err).NotTo(o.HaveOccurred(), "timed out waiting for namespace %s to be created", privNS)
+
+	secretRBs := []struct {
+		name        string
+		namespace   string
+		clusterRole string
+	}{
+		{"secret-creator", flow.Namespace, "netobserv-secret-creator"},
+		{"secret-creator", privNS, "netobserv-secret-creator"},
+	}
+	for _, rb := range secretRBs {
+		_, err := k8sClient.RbacV1().RoleBindings(rb.namespace).Create(context.Background(), &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: rb.name, Namespace: rb.namespace},
+			RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: rb.clusterRole},
+			Subjects:   []rbacv1.Subject{operatorSA},
+		}, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			continue
+		}
+		o.Expect(err).NotTo(o.HaveOccurred())
+	}
+
+	// flp-informers needs leases access for leader election
+	_, err = k8sClient.RbacV1().Roles(flow.Namespace).Create(context.Background(), &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "flp-informers-leases", Namespace: flow.Namespace},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{"coordination.k8s.io"},
+			Resources: []string{"leases"},
+			Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+		}},
+	}, metav1.CreateOptions{})
+	if !apierrors.IsAlreadyExists(err) {
+		o.Expect(err).NotTo(o.HaveOccurred())
+	}
+	_, err = k8sClient.RbacV1().RoleBindings(flow.Namespace).Create(context.Background(), &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "flp-informers-leases", Namespace: flow.Namespace},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: "flp-informers-leases"},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: "flowlogs-pipeline-informers", Namespace: flow.Namespace}},
+	}, metav1.CreateOptions{})
+	if !apierrors.IsAlreadyExists(err) {
+		o.Expect(err).NotTo(o.HaveOccurred())
+	}
+}
+
+// delete flowcollector CRD from a cluster and wait for privileged namespace to be fully removed
+func (flow *Flowcollector) DeleteFlowcollector() error {
+	err := deleteDynamicResource("flowcollector", "cluster", "")
+	if err != nil {
+		return err
+	}
+	privNS := flow.Namespace + "-privileged"
+	return Resource{"namespace", privNS, ""}.WaitUntilResourceIsGone()
+}
+
+func (flow *Flowcollector) WaitForFlowcollectorReady() {
+	ctx := context.Background()
+
 	// check FLP status
 	switch flow.DeploymentModel {
 	case "Kafka":
-		waitUntilDeploymentReady(oc, "flowlogs-pipeline-transformer", flow.Namespace)
+		waitUntilDeploymentReady("flowlogs-pipeline-transformer", flow.Namespace)
 	case "Direct":
-		waitUntilDaemonSetReady(oc, "flowlogs-pipeline", flow.Namespace)
+		waitUntilDaemonSetReady("flowlogs-pipeline", flow.Namespace)
 	default:
-		waitUntilDeploymentReady(oc, "flowlogs-pipeline", flow.Namespace)
+		waitUntilDeploymentReady("flowlogs-pipeline", flow.Namespace)
 	}
 	// check informers deployment - only available in version >= 2.0
-	csvVersion, err := getCSVVersion(oc.AdminDynamicClient(), netobservNS)
+	csvVersion, err := getCSVVersion(netobservNS)
 	if err != nil {
 		e2e.Logf("Could not get CSV version, skipping informers check: %v", err)
 	} else if semver.Compare(semver.Canonical("v"+csvVersion), "v2.0.0") >= 0 {
-		waitUntilDeploymentReady(oc, "flowlogs-pipeline-informers", flow.Namespace)
+		waitUntilDeploymentReady("flowlogs-pipeline-informers", flow.Namespace)
 	} else {
 		e2e.Logf("Skipping informers check, CSV version %s is below 2.0", csvVersion)
 	}
 
 	// check ebpf-agent status
-	waitUntilDaemonSetReady(oc, "netobserv-ebpf-agent", flow.Namespace+"-privileged")
+	waitUntilDaemonSetReady("netobserv-ebpf-agent", flow.Namespace+"-privileged")
 
 	// check plugin status - only wait if Loki is enabled and plugin not explicitly disabled
 	if flow.PluginEnable != "false" && flow.LokiEnable != "false" {
-		waitUntilDeploymentReady(oc, "netobserv-plugin", flow.Namespace)
+		waitUntilDeploymentReady("netobserv-plugin", flow.Namespace)
 	}
 
-	compat_otp.AssertAllPodsToBeReady(oc, flow.Namespace)
-	compat_otp.AssertAllPodsToBeReady(oc, flow.Namespace+"-privileged")
-	err = wait.PollUntilContextTimeout(context.Background(), 10*time.Second, 600*time.Second, false, func(context.Context) (done bool, err error) {
-		condStatus, err := oc.AsAdmin().Run("get").Args("flowcollector", "cluster", "-o", `jsonpath='{.status.conditions[?(@.type=="Ready")].status}'`).Output()
-		if err != nil {
+	// Wait for all pods to be ready
+	WaitForAllPodsReady(flow.Namespace)
+	WaitForAllPodsReady(flow.Namespace + "-privileged")
+
+	// Wait for FlowCollector status to be Ready
+	err = wait.PollUntilContextTimeout(ctx, 10*time.Second, 600*time.Second, false, func(context.Context) (done bool, err error) {
+		obj, getErr := getDynamicResource("flowcollector", "cluster", "")
+		if getErr != nil {
 			return false, nil
 		}
-		condStatusStr := strings.TrimSpace(condStatus)
-		if condStatusStr == "'True'" {
+		condStatus, reason, message := getConditionStatus(obj, "Ready")
+		if condStatus == "True" {
 			return true, nil
 		}
-
-		msg, _ := oc.AsAdmin().Run("get").Args("flowcollector", "cluster", "-o", `jsonpath='{.status.conditions[?(@.type=="Ready")].reason},{.status.conditions[?(@.type=="Ready")].message}'`).Output()
-		e2e.Logf("flowcollector Ready condition status=%s: %s", condStatusStr, strings.TrimSpace(msg))
-
+		e2e.Logf("flowcollector Ready condition status=%s: %s,%s", condStatus, reason, message)
 		return false, nil
 	})
-	compat_otp.AssertWaitPollNoErr(err, "Flowcollector did not become Ready")
+	assertWaitPollNoErr(err, "Flowcollector did not become Ready")
 }
