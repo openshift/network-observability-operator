@@ -20,7 +20,7 @@ import (
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
 	. "github.com/netobserv/netobserv-operator/internal/controller/controllerstest"
-	"github.com/netobserv/netobserv-operator/internal/pkg/resources"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 	"github.com/netobserv/netobserv-operator/internal/pkg/test"
 )
 
@@ -59,8 +59,8 @@ func ControllerSpecs() {
 		Name:      transfoName,
 		Namespace: operatorNamespace,
 	}
-	rbKeyConfigWatcherMono := types.NamespacedName{Name: resources.GetRoleBindingName(constants.FLPShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
-	rbKeyConfigWatcherTransfo := types.NamespacedName{Name: resources.GetRoleBindingName(transfoShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
+	rbKeyConfigWatcherMono := types.NamespacedName{Name: roles.GetRoleBindingName(constants.FLPShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
+	rbKeyConfigWatcherTransfo := types.NamespacedName{Name: roles.GetRoleBindingName(transfoShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
 
 	// Created objects to cleanup
 	cleanupList := []client.Object{}

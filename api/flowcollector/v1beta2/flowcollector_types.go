@@ -49,10 +49,11 @@ type FlowCollectorSpec struct {
 	// Important: Run "make generate" to regenerate code after modifying this file
 
 	// Namespace where NetObserv pods are deployed.
-	// Those pods require various cluster role bindings is order to operate. Those bindings are preinstalled for service accounts located in the default namespace.
+	// It is recommended to keep the default setting, to avoid having to make manual adjustments to rights management.
+	// The deployed pods require specific cluster role bindings in order to operate.
+	// Those bindings are preinstalled for service accounts located in the default namespace ("netobserv").
 	// If you configured a different namespace, you must update (or recreate) the cluster role bindings accordingly.
-	// You can see the list of preinstalled bindings here: https://github.com/netobserv/netobserv-operator/blob/main/helm/templates/component_role_bindings.yaml
-	// +kubebuilder:default:=netobserv
+	// More information: https://github.com/netobserv/netobserv-operator/blob/main/README.md#customized-namespace
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Namespace is immutable. If you need to change it, delete and recreate the resource."
 	Namespace string `json:"namespace,omitempty"`
 

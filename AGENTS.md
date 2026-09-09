@@ -39,13 +39,13 @@ if flowCollector.Name != constants.FlowCollectorName {
 ### 🚨 Backward Compatibility
 FlowCollector v1beta2 is stable:
 - ✅ Add optional fields with defaults, use `+optional` marker
-- ❌ Never remove/rename fields or change types
+- ❌ Never remove/rename fields or change types An exception is if prior code has never been released.
 
 ### 🚨 Bundle Updates Required
 After CRD/CSV changes: `make update-bundle`
 
 ### 🚨 Image References
-Never hardcode. Use env vars:
+Never hardcode in production code (hardcoding can be ok in tests). Use env vars:
 - `RELATED_IMAGE_EBPF_AGENT`
 - `RELATED_IMAGE_FLOWLOGS_PIPELINE`
 - `RELATED_IMAGE_CONSOLE_PLUGIN`

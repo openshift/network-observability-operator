@@ -73,7 +73,7 @@ func TestNpBuilder(t *testing.T) {
 	assert := assert.New(t)
 
 	desired := getConfig()
-	mgr := &manager.Manager{ClusterInfo: &cluster.Info{}}
+	mgr := &manager.Manager{ClusterInfo: &cluster.Info{}, Config: &manager.Config{}}
 
 	desired.Spec.NetworkPolicy.Enable = nil
 	name, np := buildMainNetworkPolicy(&desired, mgr, flowslatest.OVNKubernetes, nil)
@@ -181,7 +181,7 @@ func TestNpBuilderSDN(t *testing.T) {
 	assert := assert.New(t)
 
 	desired := getConfig()
-	mgr := &manager.Manager{ClusterInfo: &cluster.Info{}}
+	mgr := &manager.Manager{ClusterInfo: &cluster.Info{}, Config: &manager.Config{}}
 
 	desired.Spec.NetworkPolicy.Enable = nil
 	_, np := buildMainNetworkPolicy(&desired, mgr, flowslatest.OpenShiftSDN, nil)
@@ -200,7 +200,7 @@ func TestNpBuilderKindnet(t *testing.T) {
 	assert := assert.New(t)
 
 	desired := getConfig()
-	mgr := &manager.Manager{ClusterInfo: &cluster.Info{}}
+	mgr := &manager.Manager{ClusterInfo: &cluster.Info{}, Config: &manager.Config{}}
 
 	desired.Spec.NetworkPolicy.Enable = nil
 	name, np := buildMainNetworkPolicy(&desired, mgr, flowslatest.Kindnet, nil)
@@ -296,7 +296,7 @@ func TestNpBuilderOtherCNI(t *testing.T) {
 	assert := assert.New(t)
 
 	desired := getConfig()
-	mgr := &manager.Manager{ClusterInfo: &cluster.Info{}}
+	mgr := &manager.Manager{ClusterInfo: &cluster.Info{}, Config: &manager.Config{}}
 
 	desired.Spec.NetworkPolicy.Enable = nil
 	_, np := buildMainNetworkPolicy(&desired, mgr, "", nil)

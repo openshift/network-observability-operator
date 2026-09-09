@@ -34,6 +34,8 @@ type Config struct {
 	EBPFByteCodeImage string
 	// Operator namespace
 	Namespace string
+	// Default operands namespace
+	DefaultOperandsNamespace string
 	// Release kind is either upstream or downstream
 	DownstreamDeployment bool
 	// Static plugin configuration

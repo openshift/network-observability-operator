@@ -32,6 +32,7 @@ func TestAPIs(t *testing.T) {
 var _ = Describe("FLP Controller", Ordered, Serial, func() {
 	ControllerSpecs()
 	ControllerFlowMetricsSpecs()
+	ControllerSARSpecs()
 })
 
 var _ = BeforeSuite(func() {

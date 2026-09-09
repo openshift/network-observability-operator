@@ -46,6 +46,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 )
 
 const (
@@ -61,7 +62,13 @@ type SuiteContext struct {
 
 func PrepareEnvTest(controllers []manager.Registerer, namespaces []string, basePath string) (context.Context, client.Client, *SuiteContext) {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
-	ctx, cancel := context.WithCancel(context.TODO())
+	ctx, cancelCtx := context.WithCancel(context.TODO())
+	// Disable SAR checks to avoid the need to stub all RBAC (not concurrent-safe)
+	restore := roles.EnableSARChecks(false)
+	cancel := func() {
+		restore()
+		cancelCtx()
+	}
 
 	By("bootstrapping test environment")
 	testEnv := &envtest.Environment{
@@ -184,7 +191,8 @@ func PrepareEnvTest(controllers []manager.Registerer, namespaces []string, baseP
 		ConsolePluginImageVariants: []manager.ConsolePluginImageVariant{
 			{Image: "quay.io/netobserv/network-observability-console-plugin:test", MinVersion: "4.14.0"},
 		},
-		Namespace: "main-namespace",
+		Namespace:                "main-namespace",
+		DefaultOperandsNamespace: "netobserv",
 		StaticPluginConfig: manager.StaticPluginConfig{
 			InheritTolerationFromSubscription: "netobserv-operator",
 		},

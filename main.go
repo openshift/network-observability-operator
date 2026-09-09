@@ -242,7 +242,15 @@ func main() {
 	}
 }
 
+func defaultStringEnv(env, def string) string {
+	if v := os.Getenv(env); v != "" {
+		return v
+	}
+	return def
+}
+
 func readConfigFromEnv(c *manager.Config) {
+	c.DefaultOperandsNamespace = defaultStringEnv("DEFAULT_OPERANDS_NAMESPACE", "netobserv")
 	c.StaticPluginConfig = manager.StaticPluginConfig{
 		InheritTolerationFromSubscription: os.Getenv("STATIC_PLUGIN_INHERIT_TOLERATION_SUBSCRIPTION"),
 	}

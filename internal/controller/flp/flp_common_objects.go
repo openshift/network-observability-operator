@@ -267,7 +267,7 @@ func metricsSettings(desired *flowslatest.FlowCollectorSpec, vol *volumes.Builde
 	return metricsSettings
 }
 
-func getJSONConfigs(desired *flowslatest.FlowCollectorSpec, vol *volumes.Builder, promTLS *flowslatest.CertificateReference, pipeline *PipelineBuilder, dynCMName string) (string, string, error) {
+func getJSONConfigs(desired *flowslatest.FlowCollectorSpec, ns string, vol *volumes.Builder, promTLS *flowslatest.CertificateReference, pipeline *PipelineBuilder, dynCMName string) (string, string, error) {
 	metricsSettings := metricsSettings(desired, vol, promTLS)
 	advancedConfig := helper.GetAdvancedProcessorConfig(desired)
 	static, dynamic := pipeline.GetSplitStageParams()
@@ -280,7 +280,7 @@ func getJSONConfigs(desired *flowslatest.FlowCollectorSpec, vol *volumes.Builder
 		"parameters":      static,
 		"metricsSettings": metricsSettings,
 		"dynamicParameters": config.DynamicParameters{
-			Namespace: desired.Namespace,
+			Namespace: ns,
 			Name:      dynCMName,
 			FileName:  configFile,
 		},
