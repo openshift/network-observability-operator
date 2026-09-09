@@ -14,6 +14,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/controller/reconcilers"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 )
 
 const (
@@ -56,16 +57,14 @@ func (r *informerReconciler) reconcile(ctx context.Context, desired *flowslatest
 
 	if desired.Spec.OnHold() {
 		r.Status.SetUnused("FlowCollector is on hold")
-		r.Managed.TryDeleteAll(ctx)
-		return nil
+		return r.Managed.TryDeleteAll(ctx)
 	}
 
 	// Check if informers are enabled (default: false)
 	if !desired.Spec.Processor.IsInformerCacheProxyEnabled() {
 		// Informers disabled - cleanup resources and use local informers mode
 		r.Status.SetUnused("Centralized informers disabled - using local informers mode")
-		r.Managed.TryDeleteAll(ctx)
-		return nil
+		return r.Managed.TryDeleteAll(ctx)
 	}
 
 	// Informers enabled - proceed with reconciliation
@@ -97,6 +96,12 @@ func (r *informerReconciler) reconcileServiceAccount(ctx context.Context, builde
 			return fmt.Errorf("failed to create service account: %w", err)
 		}
 	} // We only configure name, update is not needed for now
+
+	// Check installed CRB, and notify any missing one
+	if err := roles.CheckHasPermission(ctx, r.Client, r.Namespace, informerName, roles.FLPInformersRole); err != nil {
+		return err
+	}
+
 	return nil
 }
 

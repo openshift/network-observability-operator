@@ -6,15 +6,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-type ClusterRoleName string
 type RoleName string
 
 const (
-	DefaultOperatorNamespace = "netobserv"
 	OperatorName             = "netobserv-operator"
 	ControllerName           = "netobserv-controller-manager"
 	WebhookPort              = 9443
+	OperatorMetricsPort      = 8443
 	K8sAPIServerPort         = 6443
+	CPMetricsPort            = 9002
 	FLPName                  = "flowlogs-pipeline"
 	FLPShortName             = "flp"
 	FLPPortName              = "flp" // must be <15 chars
@@ -37,7 +37,9 @@ const (
 	EBPFSecurityContext               = EBPFAgentName
 	EBPFMetricPort                    = 9400
 
-	OpenShiftCertificateAnnotation = "service.beta.openshift.io/serving-cert-secret-name"
+	OpenShiftCertificateAnnotation        = "service.beta.openshift.io/serving-cert-secret-name"
+	OpenShiftReqSCCAnnotation             = "openshift.io/required-scc"
+	OpenShiftReqSCCAnnotationDefaultValue = "restricted-v2"
 
 	// PodConfigurationDigest is an annotation name to facilitate pod restart after
 	// any external configuration change
@@ -54,11 +56,11 @@ const (
 	KubeSystemNamespace             = "kube-system"
 	OpenShiftAPIServerNamespace     = "openshift-apiserver"
 	OpenShiftKubeAPIServerNamespace = "openshift-kube-apiserver"
-	MonitoringNamespace             = "openshift-monitoring"
+	OpenShiftMonitoringNamespace    = "openshift-monitoring"
 	MonitoringServiceAccount        = "prometheus-k8s"
-	UWMonitoringNamespace           = "openshift-user-workload-monitoring"
-	ConsoleNamespace                = "openshift-console"
-	DNSNamespace                    = "openshift-dns"
+	OpenShiftUWMonitoringNamespace  = "openshift-user-workload-monitoring"
+	OpenShiftConsoleNamespace       = "openshift-console"
+	OpenShiftDNSNamespace           = "openshift-dns"
 
 	// Roles, must match names in config/rbac/component_roles.yaml (without netobserv- prefix)
 	ExposeMetricsRole RoleName = "netobserv-expose-metrics"

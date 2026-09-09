@@ -21,6 +21,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/controller/reconcilers"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -105,7 +106,7 @@ func (r *CPReconciler) reconcile(ctx context.Context, desired *flowslatest.FlowC
 		}
 
 		if hasPluginAPI {
-			if err = r.reconcilePlugin(ctx, &builder, constants.PluginName, "NetObserv plugin"); err != nil {
+			if err = r.reconcilePlugin(ctx, &builder, constants.PluginName); err != nil {
 				return err
 			}
 		}
@@ -139,7 +140,9 @@ func (r *CPReconciler) reconcile(ctx context.Context, desired *flowslatest.FlowC
 		}
 	} else {
 		// delete any existing owned object
-		r.Managed.TryDeleteAll(ctx)
+		if err := r.Managed.TryDeleteAll(ctx); err != nil {
+			return err
+		}
 		if desired.Spec.OnHold() {
 			r.Status.SetUnused("FlowCollector is on hold")
 		} else {
@@ -179,10 +182,23 @@ func (r *CPReconciler) reconcilePermissions(ctx context.Context, builder *builde
 		return r.CreateOwned(ctx, builder.serviceAccount(name))
 	} // update not needed for now
 
+	// Check installed CRB, and notify any missing one
+	// Token review
+	if err := roles.CheckHasPermission(ctx, r.Client, r.Namespace, name, roles.ConsoleTokenReviewRole); err != nil {
+		return err
+	}
+	if builder.useStandalone {
+		// Currently, standalone mode uses service account token, not user token, for permissions.
+		// Require FlowCollector viewer role so that it can display the FC status icon.
+		if err := roles.CheckHasPermission(ctx, r.Client, r.Namespace, name, roles.FlowCollectorViewerRole); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, name, displayName string) error {
+func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, name string) error {
 	report := helper.NewChangeReport("ConsolePlugin")
 	defer report.LogIfNeeded(ctx)
 
@@ -198,7 +214,7 @@ func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, na
 	}
 
 	// Check if objects need update
-	consolePlugin := builder.consolePlugin(name, displayName)
+	consolePlugin := builder.consolePlugin(name, "NetObserv plugin")
 	if !pluginExists {
 		if err := r.CreateOwned(ctx, consolePlugin); err != nil {
 			return err

@@ -58,6 +58,7 @@ func (b *monolithBuilder) daemonSet(annotations map[string]string) *appsv1.Daemo
 	netType := hostNetwork
 	if b.info.ClusterInfo.IsOpenShift() {
 		netType = hostPort
+		annotations[constants.OpenShiftReqSCCAnnotation] = "hostnetwork"
 	}
 	pod := podTemplate(
 		monoName,
@@ -69,6 +70,7 @@ func (b *monolithBuilder) daemonSet(annotations map[string]string) *appsv1.Daemo
 		netType,
 		annotations,
 		b.info.ClusterInfo.IsOpenShift(),
+		b.info.TLSConfig,
 	)
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -90,6 +92,9 @@ func (b *monolithBuilder) daemonSet(annotations map[string]string) *appsv1.Daemo
 }
 
 func (b *monolithBuilder) deployment(annotations map[string]string) *appsv1.Deployment {
+	if b.info.ClusterInfo.IsOpenShift() {
+		annotations[constants.OpenShiftReqSCCAnnotation] = constants.OpenShiftReqSCCAnnotationDefaultValue
+	}
 	pod := podTemplate(
 		monoName,
 		b.version,
@@ -100,6 +105,7 @@ func (b *monolithBuilder) deployment(annotations map[string]string) *appsv1.Depl
 		svc,
 		annotations,
 		b.info.ClusterInfo.IsOpenShift(),
+		b.info.TLSConfig,
 	)
 	replicas := b.desired.Processor.GetFLPReplicas()
 	return &appsv1.Deployment{
@@ -125,6 +131,7 @@ func (b *monolithBuilder) deployment(annotations map[string]string) *appsv1.Depl
 func (b *monolithBuilder) configMaps() (*corev1.ConfigMap, string, *corev1.ConfigMap, error) {
 	pipeline, err := createPipeline(
 		b.desired,
+		b.info.Namespace,
 		b.flowMetrics,
 		b.fcSlices,
 		b.detectedSubnets,
@@ -138,7 +145,7 @@ func (b *monolithBuilder) configMaps() (*corev1.ConfigMap, string, *corev1.Confi
 	}
 
 	// Get static and dynamic CM
-	static, dynamic, err := getJSONConfigs(b.desired, &b.volumes, b.promTLS, pipeline, monoDynConfigMap)
+	static, dynamic, err := getJSONConfigs(b.desired, b.info.Namespace, &b.volumes, b.promTLS, pipeline, monoDynConfigMap)
 	if err != nil {
 		return nil, "", nil, err
 	}

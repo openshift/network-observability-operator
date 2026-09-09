@@ -73,8 +73,6 @@ metadata:
   name: cluster
 spec:
   namespace: netobserv
-  networkPolicy:
-    enable: false
   processor:
     service:
       tlsType: Auto-mTLS
@@ -94,7 +92,7 @@ EOF
 
 A few remarks:
 - You can change the Prometheus and Loki URLs depending on your installation. This example works if you use the "standalone" installation described above, with `install.loki=true` and `install.prom-stack=true`. Check more configuration options for [Prometheus](https://github.com/netobserv/netobserv-operator/blob/main/docs/FlowCollector.md#flowcollectorspecprometheus-1) and [Loki](https://github.com/netobserv/netobserv-operator/blob/main/docs/FlowCollector.md#flowcollectorspecloki-1).
-- Depending on the Kubernetes distribution and CNI, NetObserv may come secured by default with a built-in network policy. You can force installing it or not by setting `spec.networkPolicy.enable` in `FlowCollector`. If the built-in policy does not work as intended, it is recommended to turn it off and create your own instead. NetObserv runs some highly privileged workloads, thus it is important to keep it as much isolated as possible. See [NetworkPolicy.md](./docs/NetworkPolicy.md) for more details on how to create a policy.
+- Depending on the Kubernetes distribution and CNI, NetObserv may come secured by default with a built-in network policy. You can force installing it or not by setting the helm value `operator.installNetworkPolicy=true/false`. If the built-in policy does not work as intended, it is recommended to turn it off and create your own instead. NetObserv runs some highly privileged workloads, thus it is important to keep it as much isolated as possible. See [NetworkPolicy.md](./docs/NetworkPolicy.md) for more details on how to create a policy.
 
 To view the test console, you can port-forward 9001:
 
@@ -191,9 +189,9 @@ A couple of settings deserve special attention:
 
 - To enable availability zones awareness, set `spec.processor.addZone` to `true`.
 
-### Permissions for Loki and Kafka
+### Permissions for Loki, Kafka, and for customized namespace
 
-For security reasons, the operator does not have cluster-wide permissions to read secrets. When the operator needs to access a secret, such as a TLS certificate, you need to grant that permission explicitly. This happens when you configure Kafka with TLS or mTLS, or when you use the Loki operator with `LokiStack` installed in a separate namespace.
+For security reasons, the operator does not have cluster-wide permissions to read secrets. When the operator needs to access a secret, such as a TLS certificate, you need to grant that permission explicitly. This happens when you configure Kafka with TLS or mTLS, or when you use the Loki operator with `LokiStack` installed in a separate namespace. Similarly, if you don't use the default namespace in `FlowCollector` `spec.namespace`, you need to grant operands permissions manually.
 
 #### Kafka with TLS / mTLS
 
@@ -221,6 +219,35 @@ Considering you installed `LokiStack` in a different namespace:
 ```bash
 kubectl create rolebinding secret-watcher -n <lokistack-namespace> --clusterrole=netobserv-secret-watcher --serviceaccount=netobserv:netobserv-controller-manager
 kubectl create rolebinding secret-creator -n netobserv --clusterrole=netobserv-secret-creator --serviceaccount=netobserv:netobserv-controller-manager
+```
+
+#### Customized namespace
+
+Considering you use a non-default `spec.namespace` in `FlowCollector`:
+
+```bash
+kubectl create clusterrolebinding netobserv-informers-custom \
+  --clusterrole=netobserv-informers \
+  --serviceaccount=<namespace>:flowlogs-pipeline \
+  --serviceaccount=<namespace>:flowlogs-pipeline-transformer \
+  --serviceaccount=<namespace>:flowlogs-pipeline-informers
+
+kubectl create clusterrolebinding netobserv-lokiwriter-custom \
+  --clusterrole=netobserv-loki-writer \
+  --serviceaccount=<namespace>:flowlogs-pipeline \
+  --serviceaccount=<namespace>:flowlogs-pipeline-transformer
+
+kubectl create clusterrolebinding netobserv-hostnetwork-custom \
+  --clusterrole=netobserv-hostnetwork \
+  --serviceaccount=<namespace>:flowlogs-pipeline
+
+kubectl create clusterrolebinding netobserv-tokenreview-custom \
+  --clusterrole=netobserv-token-review \
+  --serviceaccount=<namespace>:netobserv-plugin
+
+kubectl create clusterrolebinding netobserv-flowcollector-viewer-role-custom \
+  --clusterrole=netobserv-flowcollector-viewer-role \
+  --serviceaccount=<namespace>:netobserv-plugin
 ```
 
 ### Metrics
@@ -279,7 +306,7 @@ Since `FlowCollector v1beta2`, NetObserv is automatically configured with multi-
 To give flow logs access to a `test` user, run:
 
 ```bash
-oc adm policy add-cluster-role-to-user netobserv-loki-reader test
+kubectl create clusterrolebinding loki-reader-test --clusterrole=netobserv-loki-reader --user=test
 ```
 
 More information about multi-tenancy can be found on [this page](https://github.com/netobserv/documents/blob/main/multitenancy.md).

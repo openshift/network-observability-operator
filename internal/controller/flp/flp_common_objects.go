@@ -1,6 +1,7 @@
 package flp
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -101,6 +102,7 @@ func podTemplate(
 	netType flowNetworkType,
 	annotations map[string]string,
 	isOpenShift bool,
+	tlsConfig *tls.Config,
 ) corev1.PodTemplateSpec {
 	advancedConfig := helper.GetAdvancedProcessorConfig(desired)
 	var ports []corev1.ContainerPort
@@ -155,7 +157,7 @@ func podTemplate(
 		envs = append(envs, corev1.EnvVar{Name: pair[0], Value: pair[1]})
 	}
 	envs = append(envs, constants.EnvNoHTTP2)
-
+	envs = helper.AppendTLSEnvVars(envs, tlsConfig)
 	envs = helper.EnvFromReqsLimits(envs, &desired.Processor.Resources)
 
 	// Build args - only include k8scache flags when centralized informers are enabled
@@ -184,17 +186,17 @@ func podTemplate(
 			},
 		},
 	}})
-
 	container := corev1.Container{
-		Name:            constants.FLPName,
-		Image:           imageName,
-		ImagePullPolicy: corev1.PullPolicy(desired.Processor.ImagePullPolicy),
-		Args:            args,
-		Resources:       *desired.Processor.Resources.DeepCopy(),
-		VolumeMounts:    volumeMounts,
-		Ports:           ports,
-		Env:             envs,
-		SecurityContext: helper.ContainerDefaultSecurityContext(),
+		Name:                     constants.FLPName,
+		Image:                    imageName,
+		ImagePullPolicy:          corev1.PullPolicy(desired.Processor.ImagePullPolicy),
+		Args:                     args,
+		Resources:                *desired.Processor.Resources.DeepCopy(),
+		VolumeMounts:             volumeMounts,
+		Ports:                    ports,
+		Env:                      envs,
+		SecurityContext:          helper.ContainerDefaultSecurityContext(),
+		TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 	}
 	if *advancedConfig.EnableKubeProbes {
 		container.LivenessProbe = &corev1.Probe{
@@ -317,7 +319,7 @@ func addK8sCacheArgs(desired *flowslatest.FlowCollectorSpec, vols *volumes.Build
 	}
 }
 
-func getJSONConfigs(desired *flowslatest.FlowCollectorSpec, vol *volumes.Builder, promTLS *flowslatest.CertificateReference, pipeline *PipelineBuilder, dynCMName string) (string, string, error) {
+func getJSONConfigs(desired *flowslatest.FlowCollectorSpec, ns string, vol *volumes.Builder, promTLS *flowslatest.CertificateReference, pipeline *PipelineBuilder, dynCMName string) (string, string, error) {
 	metricsSettings := metricsSettings(desired, vol, promTLS)
 	advancedConfig := helper.GetAdvancedProcessorConfig(desired)
 	static, dynamic := pipeline.GetSplitStageParams()
@@ -327,7 +329,7 @@ func getJSONConfigs(desired *flowslatest.FlowCollectorSpec, vol *volumes.Builder
 		"parameters":      static,
 		"metricsSettings": metricsSettings,
 		"dynamicParameters": config.DynamicParameters{
-			Namespace: desired.Namespace,
+			Namespace: ns,
 			Name:      dynCMName,
 			FileName:  configFile,
 		},

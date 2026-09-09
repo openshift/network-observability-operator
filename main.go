@@ -24,12 +24,15 @@ import (
 	"fmt"
 	_ "net/http/pprof"
 	"os"
+	"strconv"
 
 	bpfmaniov1alpha1 "github.com/bpfman/bpfman-operator/apis/v1alpha1"
 	lokiv1 "github.com/grafana/loki/operator/apis/loki/v1"
+	configv1 "github.com/openshift/api/config/v1"
 	osv1 "github.com/openshift/api/console/v1"
 	operatorsv1 "github.com/openshift/api/operator/v1"
 	securityv1 "github.com/openshift/api/security/v1"
+	tlspkg "github.com/openshift/controller-runtime-common/pkg/tls"
 	olm "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"go.uber.org/zap/zapcore"
@@ -42,6 +45,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	apiregv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -127,7 +131,11 @@ func main() {
 	}
 	setupLog.Info("Starting " + appVersion)
 
-	config := readConfigFromEnv()
+	config, err := readConfigFromEnv()
+	if err != nil {
+		setupLog.Error(err, "error while reading config from env")
+		os.Exit(1)
+	}
 	if err := config.Validate(); err != nil {
 		setupLog.Error(err, "unable to start the manager")
 		os.Exit(1)
@@ -147,7 +155,7 @@ func main() {
 	}
 
 	var metricsCertWatcher *certwatcher.CertWatcher
-	k8sCfg := ctrl.GetConfigOrDie()
+	cfg := ctrl.GetConfigOrDie()
 	metricsOptions := server.Options{
 		BindAddress:    metricsAddr,
 		TLSOpts:        []func(*tls.Config){disableHTTP2},
@@ -158,7 +166,6 @@ func main() {
 		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
 			"metrics-cert-file", metricsCertFile, "metrics-cert-key-file", metricsCertKeyFile)
 
-		var err error
 		metricsCertWatcher, err = certwatcher.New(metricsCertFile, metricsCertKeyFile)
 		if err != nil {
 			setupLog.Error(err, "Failed to initialize metrics certificate watcher", "error", err)
@@ -172,7 +179,8 @@ func main() {
 		setupLog.Info("Warning: metrics server does not use TLS")
 	}
 
-	mgr, err := manager.NewManager(context.Background(), k8sCfg, config, &ctrl.Options{
+	// Create Manager (will fetch TLS profile and configure servers internally)
+	mgr, err := manager.NewManager(context.Background(), cfg, config, &ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsOptions,
 		WebhookServer: webhook.NewServer(webhook.Options{
@@ -206,6 +214,13 @@ func main() {
 		}
 	}
 
+	ctx, stop := context.WithCancel(ctrl.SetupSignalHandler())
+
+	if err := setupTLSProfileWatcher(mgr, stop); err != nil {
+		setupLog.Error(err, "unable to setup TLS profile watcher")
+		os.Exit(1)
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -216,11 +231,12 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
 }
+
 func defaultStringEnv(env, def string) string {
 	if v := os.Getenv(env); v != "" {
 		return v
@@ -228,19 +244,78 @@ func defaultStringEnv(env, def string) string {
 	return def
 }
 
-func readConfigFromEnv() *manager.Config {
+func maybeBoolEnv(env string) (*bool, error) {
+	if v := os.Getenv(env); v != "" {
+		// Use ParseBool to allow common variants ("true", "True", "1"...) and ignore non-bools
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s value %q: %w", env, v, err)
+		}
+		return ptr.To(b), nil
+	}
+	return nil, nil
+}
+
+// setupTLSProfileWatcher configures the SecurityProfileWatcher on OpenShift clusters.
+// On OpenShift with no explicit TLS profile, OCP uses the Intermediate default; we still
+// set up the watcher so that a future explicit profile change is detected and triggers a restart.
+func setupTLSProfileWatcher(mgr *manager.Manager, stop context.CancelFunc) error {
+	if !mgr.ClusterInfo.IsOpenShift() {
+		return nil
+	}
+	tlsProfileSpec := mgr.ClusterInfo.GetTLSProfileSpec()
+	if tlsProfileSpec == nil {
+		// No explicit profile — use Intermediate (OCP's implicit default) as the baseline
+		tlsProfileSpec = configv1.TLSProfiles[configv1.TLSProfileIntermediateType]
+	}
+	if tlsProfileSpec == nil {
+		return nil
+	}
+	setupLog.Info("Setting up TLS profile watcher for graceful restart on profile changes")
+	// Known self-healing behavior: on a TLS profile change the operator reloads by exiting 0
+	// (graceful) so it restarts with the new profile. The baseline profile compared against is
+	// re-captured on every container start (InitialTLSProfileSpec above). During a control-plane
+	// rollout — especially two overlapping profile changes — a freshly started container can read
+	// a stale/lagging APIServer value as its baseline and is then forced to reload once the real
+	// value settles. Because this repeats per restart within the rollout window, several graceful
+	// (exit 0) reloads can cluster together, and kubelet flags the clustered restarts as
+	// CrashLoopBackOff regardless of exit code. This is cosmetic and self-heals: each reload is a
+	// correct reaction (the container really had the wrong profile), and once the rollout settles
+	// the operator comes up stable.
+	return (&tlspkg.SecurityProfileWatcher{
+		Client:                mgr.GetClient(),
+		InitialTLSProfileSpec: *tlsProfileSpec,
+		OnProfileChange: func(_ context.Context, oldSpec, newSpec configv1.TLSProfileSpec) {
+			setupLog.Info("TLS profile has changed, initiating graceful shutdown to reload",
+				"oldProfile", oldSpec, "newProfile", newSpec)
+			stop()
+		},
+	}).SetupWithManager(mgr)
+}
+
+func readConfigFromEnv() (*manager.Config, error) {
+	deployNetpol, err := maybeBoolEnv("OPERATOR_NETWORK_POLICY")
+	if err != nil {
+		return nil, err
+	}
 	return &manager.Config{
-		Vendor:                constants.Vendor(os.Getenv("VENDOR")),
-		EBPFAgentImage:        defaultStringEnv("RELATED_IMAGE_EBPF_AGENT", "quay.io/netobserv/netobserv-ebpf-agent:main"),
-		EBPFByteCodeImage:     defaultStringEnv("RELATED_IMAGE_EBPF_BYTECODE", "quay.io/netobserv/ebpf-bytecode:main"), // TODO: productize for GA
-		FlowlogsPipelineImage: defaultStringEnv("RELATED_IMAGE_FLOWLOGS_PIPELINE", "quay.io/netobserv/flowlogs-pipeline:main"),
-		WebConsoleImage:       defaultStringEnv("RELATED_IMAGE_WEB_CONSOLE", "quay.io/netobserv/network-observability-console-plugin:main"),
-		WebConsolePF4Image:    defaultStringEnv("RELATED_IMAGE_WEB_CONSOLE_PF4", "quay.io/netobserv/network-observability-console-plugin:main-pf4"),
-		WebConsolePF5Image:    defaultStringEnv("RELATED_IMAGE_WEB_CONSOLE_PF5", "quay.io/netobserv/network-observability-console-plugin:main-pf5"),
-		DemoLokiImage:         defaultStringEnv("RELATED_IMAGE_DEMO_LOKI", "grafana/loki:3.5.0"),
-		Namespace:             defaultStringEnv("NAMESPACE", "netobserv"),
+		Vendor:                   constants.Vendor(os.Getenv("VENDOR")),
+		EBPFAgentImage:           defaultStringEnv("RELATED_IMAGE_EBPF_AGENT", "quay.io/netobserv/netobserv-ebpf-agent:main"),
+		EBPFByteCodeImage:        defaultStringEnv("RELATED_IMAGE_EBPF_BYTECODE", "quay.io/netobserv/ebpf-bytecode:main"), // TODO: productize for GA
+		FlowlogsPipelineImage:    defaultStringEnv("RELATED_IMAGE_FLOWLOGS_PIPELINE", "quay.io/netobserv/flowlogs-pipeline:main"),
+		WebConsoleImage:          defaultStringEnv("RELATED_IMAGE_WEB_CONSOLE", "quay.io/netobserv/network-observability-console-plugin:main"),
+		WebConsolePF4Image:       defaultStringEnv("RELATED_IMAGE_WEB_CONSOLE_PF4", "quay.io/netobserv/network-observability-console-plugin:main-pf4"),
+		WebConsolePF5Image:       defaultStringEnv("RELATED_IMAGE_WEB_CONSOLE_PF5", "quay.io/netobserv/network-observability-console-plugin:main-pf5"),
+		DemoLokiImage:            defaultStringEnv("RELATED_IMAGE_DEMO_LOKI", "grafana/loki:3.5.0"),
+		Namespace:                defaultStringEnv("NAMESPACE", "netobserv"),
+		DefaultOperandsNamespace: defaultStringEnv("DEFAULT_OPERANDS_NAMESPACE", "netobserv"),
 		StaticPluginConfig: manager.StaticPluginConfig{
 			InheritTolerationFromSubscription: os.Getenv("STATIC_PLUGIN_INHERIT_TOLERATION_SUBSCRIPTION"),
+			CPURequest:                        defaultStringEnv("STATIC_PLUGIN_CPU_REQUEST", "10m"),
+			MemoryRequest:                     defaultStringEnv("STATIC_PLUGIN_MEMORY_REQUEST", "64Mi"),
+			CPULimit:                          defaultStringEnv("STATIC_PLUGIN_CPU_LIMIT", ""),
+			MemoryLimit:                       defaultStringEnv("STATIC_PLUGIN_MEMORY_LIMIT", ""),
 		},
-	}
+		DeployOperatorNetworkPolicy: deployNetpol,
+	}, nil
 }

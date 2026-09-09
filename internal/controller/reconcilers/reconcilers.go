@@ -46,6 +46,22 @@ var (
 		},
 		GenericFunc: func(_ event.GenericEvent) bool { return false },
 	})
+	OperatorOwned = func(ns string) builder.Predicates {
+		return builder.WithPredicates(predicate.Funcs{
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				return helper.IsOperatorOwned(ns, e.ObjectNew)
+			},
+			CreateFunc: func(e event.CreateEvent) bool {
+				return helper.IsOperatorOwned(ns, e.Object)
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return helper.IsOperatorOwned(ns, e.Object)
+			},
+			GenericFunc: func(e event.GenericEvent) bool {
+				return helper.IsOperatorOwned(ns, e.Object)
+			},
+		})
+	}
 )
 
 func ReconcileRoleBinding(ctx context.Context, cl *helper.Client, desired *rbacv1.RoleBinding) error {
@@ -133,7 +149,9 @@ func ReconcileHPA(ctx context.Context, ci *Instance, old, n *ascv2.HorizontalPod
 			return ci.UpdateIfOwned(ctx, old, n)
 		}
 	} else {
-		ci.Managed.TryDelete(ctx, old)
+		if err := ci.Managed.TryDelete(ctx, old); err != nil {
+			return err
+		}
 	}
 	return nil
 }

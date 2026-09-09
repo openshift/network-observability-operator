@@ -81,7 +81,7 @@ func Start(ctx context.Context, mgr *manager.Manager) (manager.PostCreateHook, e
 				if labels != nil && labels["netobserv"] == "true" {
 					return []reconcile.Request{{NamespacedName: constants.FlowCollectorName}}
 				}
-				return []reconcile.Request{}
+				return nil
 			}),
 		)
 		log.Info("PrometheusRule CRD detected, watching for netobserv=true rules")
@@ -140,7 +140,7 @@ func (r *FlowCollectorReconciler) Reconcile(ctx context.Context, _ ctrl.Request)
 }
 
 func (r *FlowCollectorReconciler) reconcile(ctx context.Context, clh *helper.Client, desired *flowslatest.FlowCollector) error {
-	ns := desired.Spec.GetNamespace()
+	ns := helper.GetOperandsNamespace(&desired.Spec, r.mgr.Config)
 	previousNamespace := r.status.GetDeployedNamespace(desired)
 	lokiConfig := helper.NewLokiConfig(&desired.Spec.Loki, ns)
 	reconcilersInfo := r.newCommonInfo(clh, ns, &lokiConfig)
@@ -158,11 +158,7 @@ func (r *FlowCollectorReconciler) reconcile(ctx context.Context, clh *helper.Cli
 
 	var cpImage string
 	if desired.Spec.NeedsConsolePluginDeployment(r.mgr.ClusterInfo.HasConsolePlugin()) {
-		var err error
-		cpImage, err = r.mgr.Config.ResolveWebConsoleImage(r.mgr.ClusterInfo)
-		if err != nil {
-			return r.status.Error("ConsolePluginImageError", err)
-		}
+		cpImage = r.mgr.Config.ResolveWebConsoleImage(r.mgr.ClusterInfo)
 	}
 	cpReconciler := consoleplugin.NewReconciler(reconcilersInfo.NewInstance(
 		map[reconcilers.ImageRef]string{
@@ -228,5 +224,6 @@ func (r *FlowCollectorReconciler) newCommonInfo(clh *helper.Client, ns string, l
 		Watcher:     r.watcher,
 		Loki:        loki,
 		Vendor:      r.mgr.Config.Vendor,
+		TLSConfig:   r.mgr.ClusterInfo.GetComponentTLSConfig(),
 	}
 }

@@ -819,6 +819,7 @@ spec:
         - apiGroups:
           - config.openshift.io
           resources:
+          - apiservers
           - clusterversions
           - networks
           verbs:
@@ -1012,10 +1013,18 @@ spec:
                   value: quay.io/netobserv/network-observability-console-plugin:v1.12.0-community-pf5
                 - name: RELATED_IMAGE_DEMO_LOKI
                   value: grafana/loki:3.5.0
+                - name: STATIC_PLUGIN_CPU_REQUEST
+                  value: 10m
+                - name: STATIC_PLUGIN_MEMORY_REQUEST
+                  value: 64Mi
+                - name: STATIC_PLUGIN_CPU_LIMIT
+                - name: STATIC_PLUGIN_MEMORY_LIMIT
                 - name: NAMESPACE
                   valueFrom:
                     fieldRef:
                       fieldPath: metadata.namespace
+                - name: OPERATOR_NETWORK_POLICY
+                  value: "true"
                 image: quay.io/netobserv/network-observability-operator:1.12.0-community
                 imagePullPolicy: Always
                 livenessProbe:
@@ -1047,6 +1056,13 @@ spec:
                     drop:
                     - ALL
                   readOnlyRootFilesystem: true
+                startupProbe:
+                  failureThreshold: 30
+                  httpGet:
+                    path: /healthz
+                    port: 8081
+                  periodSeconds: 10
+                terminationMessagePolicy: FallbackToLogsOnError
                 volumeMounts:
                 - mountPath: /tmp/k8s-webhook-server/serving-certs
                   name: cert

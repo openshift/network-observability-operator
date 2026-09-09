@@ -21,8 +21,9 @@ import (
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
 	. "github.com/netobserv/netobserv-operator/internal/controller/envtest"
-	"github.com/netobserv/netobserv-operator/internal/pkg/resources"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 	"github.com/netobserv/netobserv-operator/internal/pkg/test"
+	"github.com/netobserv/netobserv-operator/internal/pkg/tlsconfig"
 )
 
 const (
@@ -68,8 +69,8 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 		Name:      "flowlogs-pipeline-k8scache",
 		Namespace: operatorNamespace,
 	}
-	rbKeyConfigWatcherMono := types.NamespacedName{Name: resources.GetRoleBindingName(monoShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
-	rbKeyConfigWatcherTransfo := types.NamespacedName{Name: resources.GetRoleBindingName(transfoShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
+	rbKeyConfigWatcherMono := types.NamespacedName{Name: roles.GetRoleBindingName(monoShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
+	rbKeyConfigWatcherTransfo := types.NamespacedName{Name: roles.GetRoleBindingName(transfoShortName, constants.ConfigWatcherRole), Namespace: operatorNamespace}
 
 	// Created objects to cleanup
 	cleanupList := []client.Object{}
@@ -125,6 +126,11 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 				}
 				return nil
 			}, timeout, interval).Should(Succeed())
+
+			if env == test.EnvOpenShift {
+				By("In OpenShift, expecting to have the required SCC annotation")
+				Expect(ds.Spec.Template.Annotations).To(HaveKeyWithValue("openshift.io/required-scc", "hostnetwork"))
+			}
 
 			By("Expecting to create the flowlogs-pipeline-informers Deployment")
 			Eventually(func() interface{} {
@@ -245,11 +251,27 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 					ContainerPort: 7891,
 					Protocol:      "TCP",
 				}))
-				g.Expect(cnt.Env).To(Equal([]v1.EnvVar{
-					{Name: "GOGC", Value: "400"},
-					{Name: "GOMAXPROCS", Value: "33"},
-					{Name: "GODEBUG", Value: "http2server=0"},
-				}))
+				if env == test.EnvOpenShift {
+					// On OpenShift, TLS settings are also relayed as env vars; only check
+					// the user-provided vars plus TLS var presence (not their exact values,
+					// which depend on the platform's default TLS security profile).
+					g.Expect(cnt.Env).To(ContainElements(
+						v1.EnvVar{Name: "GOGC", Value: "400"},
+						v1.EnvVar{Name: "GOMAXPROCS", Value: "33"},
+						v1.EnvVar{Name: "GODEBUG", Value: "http2server=0"},
+					))
+					var envNames []string
+					for _, e := range cnt.Env {
+						envNames = append(envNames, e.Name)
+					}
+					g.Expect(envNames).To(ContainElements(tlsconfig.EnvTLSMinVersion, tlsconfig.EnvTLSCipherSuites))
+				} else {
+					g.Expect(cnt.Env).To(Equal([]v1.EnvVar{
+						{Name: "GOGC", Value: "400"},
+						{Name: "GOMAXPROCS", Value: "33"},
+						{Name: "GODEBUG", Value: "http2server=0"},
+					}))
+				}
 
 				By("Allocating the proper toleration to allow its placement in the master nodes")
 				g.Expect(ds.Spec.Template.Spec.Tolerations).
@@ -301,10 +323,16 @@ func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
 		})
 
 		It("Should deploy kafka transformer", func() {
+			var dp appsv1.Deployment
 			By("Expecting transformer deployment to be created")
 			Eventually(func() interface{} {
-				return k8sClient.Get(ctx, flpKeyKafkaTransformer, &appsv1.Deployment{})
+				return k8sClient.Get(ctx, flpKeyKafkaTransformer, &dp)
 			}, timeout, interval).Should(Succeed())
+
+			if env == test.EnvOpenShift {
+				By("In OpenShift, expecting to have the required SCC annotation")
+				Expect(dp.Spec.Template.Annotations).To(HaveKeyWithValue("openshift.io/required-scc", "restricted-v2"))
+			}
 
 			By("Not expecting transformer service (k8scache has its own dedicated service)")
 			Eventually(func() error {

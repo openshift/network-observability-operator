@@ -26,8 +26,6 @@ var (
 )
 
 func TestAPIsVanilla(t *testing.T) {
-	// Uncomment and edit next line to run/debug from IDE (get the path by running: `bin/setup-envtest use 1.23 -p path`); you may need to override the test timeout in your settings.
-	// os.Setenv("KUBEBUILDER_ASSETS", "/home/jotak/.local/share/kubebuilder-envtest/k8s/1.23.5-linux-amd64")
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "FLP Controller Suite - Vanilla")
 }
@@ -38,6 +36,7 @@ var _ = Describe("FLP FlowCollector Controller - Vanilla", Ordered, Serial, func
 	ctxGetter := func() (context.Context, client.Client) { return ctx, k8sClient }
 	envtest.ControllerSpecs(env, ctxGetter)
 	envtest.ControllerFlowMetricsSpecs(ctxGetter)
+	envtest.ControllerSARSpecs(ctxGetter)
 })
 
 var _ = BeforeSuite(func() {
@@ -46,7 +45,6 @@ var _ = BeforeSuite(func() {
 		[]manager.Registerer{flp.Start},
 		"main-namespace",
 		[]string{"other-namespace"},
-		"../../..",
 	)
 })
 
