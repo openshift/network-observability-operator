@@ -47,6 +47,9 @@
       }
     ]
   },
+  "github-actions": {
+    "enabled": false
+  },
   "customManagers": [
     {
       "customType": "regex",
