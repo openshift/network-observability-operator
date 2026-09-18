@@ -83,7 +83,7 @@ endif
 IMAGE ?= $(IMAGE_TAG_BASE):$(VERSION)
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 # When updating, update also SetupKubeBuilderAssets in internal/pkg/test/envtest.go
-ENVTEST_K8S_VERSION = 1.23
+ENVTEST_K8S_VERSION = 1.34
 GOLANGCI_LINT_VERSION = v2.12.2
 CRDOC_VERSION = 0.6.4
 
@@ -405,12 +405,36 @@ uninstall: kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube
 	$(KUSTOMIZE) build config/crd | kubectl --ignore-not-found=true delete -f - || true
 
 set-manager-images: kustomize ## Update image references
+ifeq ("$(PIN_DIGEST)", "true")
+# would fail with podman, not supported so far (podman needs pull before running inspect) ; support can be added if needed
+# podman pull $image && podman inspect $image --format '{{.Digest}}'
+	@operator_digest=$$(docker buildx imagetools inspect ${IMAGE} --format '{{json .Manifest.Digest}}' | tr -d '"') ; \
+	echo "Pinning operator: $$operator_digest" ; \
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE)@$$operator_digest
+
+	@bpf_digest=$$(docker buildx imagetools inspect quay.io/netobserv/netobserv-ebpf-agent:$(BPF_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"') ; \
+	echo "Pinning eBPF agent: $$bpf_digest" ; \
+	flp_digest=$$(docker buildx imagetools inspect quay.io/netobserv/flowlogs-pipeline:$(FLP_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"') ; \
+	echo "Pinning FLP: $$flp_digest" ; \
+	plg_digest=$$(docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"') ; \
+	echo "Pinning web console: $$plg_digest" ; \
+	plg_pf5_digest=$$(docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf5 --format '{{json .Manifest.Digest}}' | tr -d '"') ; \
+	echo "Pinning web console (pf5): $$plg_pf5_digest" ; \
+	plg_pf4_digest=$$(docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf4 --format '{{json .Manifest.Digest}}' | tr -d '"') ; \
+	echo "Pinning web console (pf4): $$plg_pf4_digest" ; \
+	$(SED) -i -E "/RELATED_IMAGE_EBPF_AGENT$$/{ n; s~value:.+$$~value: quay.io/netobserv/netobserv-ebpf-agent@$$bpf_digest~}" ./config/manager/manager.yaml ; \
+	$(SED) -i -E "/RELATED_IMAGE_FLOWLOGS_PIPELINE$$/{ n; s~value:.+$$~value: quay.io/netobserv/flowlogs-pipeline@$$flp_digest~}" ./config/manager/manager.yaml ; \
+	$(SED) -i -E "/RELATED_IMAGE_WEB_CONSOLE$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin@$$plg_digest~}" ./config/manager/manager.yaml ; \
+	$(SED) -i -E "/RELATED_IMAGE_WEB_CONSOLE_PF4$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin@$$plg_pf4_digest~}" ./config/manager/manager.yaml ; \
+	$(SED) -i -E "/RELATED_IMAGE_WEB_CONSOLE_PF5$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin@$$plg_pf5_digest~}" ./config/manager/manager.yaml
+else
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMAGE}
 	$(SED) -i -E '/RELATED_IMAGE_EBPF_AGENT$$/{ n; s~value:.+$$~value: quay.io/netobserv/netobserv-ebpf-agent:$(BPF_VERSION)~}' ./config/manager/manager.yaml
 	$(SED) -i -E '/RELATED_IMAGE_FLOWLOGS_PIPELINE$$/{ n; s~value:.+$$~value: quay.io/netobserv/flowlogs-pipeline:$(FLP_VERSION)~}' ./config/manager/manager.yaml
 	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)~}' ./config/manager/manager.yaml
 	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE_PF4$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf4~}' ./config/manager/manager.yaml
 	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE_PF5$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf5~}' ./config/manager/manager.yaml
+endif
 
 deploy: BPF_VERSION=main
 deploy: FLP_VERSION=main

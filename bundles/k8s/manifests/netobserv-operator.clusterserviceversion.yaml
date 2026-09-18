@@ -458,6 +458,8 @@ spec:
         path: networkPolicy.additionalNamespaces
       - displayName: Enable
         path: networkPolicy.enable
+      - displayName: Bgp enrichment
+        path: processor.bgpEnrichment
       - displayName: Consumer replicas
         path: processor.consumerReplicas
       - displayName: Deduper

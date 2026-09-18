@@ -93,16 +93,39 @@ func deleteNamespace(ns string) {
 		return
 	}
 
-	err := k8sClient.CoreV1().Namespaces().Delete(context.Background(), ns, metav1.DeleteOptions{})
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			o.Expect(err).NotTo(o.HaveOccurred())
+	// Try delete with retry on webhook timeout
+	maxRetries := 3
+	var deleteErr error
+	for i := 0; i < maxRetries; i++ {
+		deleteErr = k8sClient.CoreV1().Namespaces().Delete(context.Background(), ns, metav1.DeleteOptions{})
+		if deleteErr == nil {
+			break // Success
 		}
+		if apierrors.IsNotFound(deleteErr) {
+			return // Already deleted
+		}
+		if isWebhookTimeoutError(deleteErr) && i < maxRetries-1 {
+			e2e.Logf("Webhook timeout deleting namespace %s (attempt %d/%d), retrying in 10s...", ns, i+1, maxRetries)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		// Any other error or webhook timeout on last attempt - break and handle below
+		break
+	}
+
+	// Fail immediately on non-webhook errors
+	if deleteErr != nil && !isWebhookTimeoutError(deleteErr) {
+		o.Expect(deleteErr).NotTo(o.HaveOccurred())
 		return
 	}
 
-	err = wait.PollUntilContextTimeout(context.Background(), 5*time.Second, 180*time.Second, false, func(context.Context) (bool, error) {
-		_, getErr := k8sClient.CoreV1().Namespaces().Get(context.Background(), ns, metav1.GetOptions{})
+	// If all retries failed with webhook timeout, log but continue to verify deletion
+	if deleteErr != nil && isWebhookTimeoutError(deleteErr) {
+		e2e.Logf("Warning: All %d attempts to delete namespace %s failed with webhook timeout, checking if deletion succeeded anyway", maxRetries, ns)
+	}
+
+	err := wait.PollUntilContextTimeout(context.Background(), 5*time.Second, 180*time.Second, false, func(ctx context.Context) (bool, error) {
+		_, getErr := k8sClient.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
 		if getErr != nil {
 			if apierrors.IsNotFound(getErr) {
 				return true, nil

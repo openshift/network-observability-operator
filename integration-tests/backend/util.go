@@ -714,6 +714,21 @@ func waitUntilDeploymentReady(deployment, ns string) {
 	assertWaitPollNoErr(err, fmt.Sprintf("Deployment %s did not become Available", deployment))
 }
 
+// waitForNetworkPolicy waits for a network policy to exist
+func waitForNetworkPolicy(namespace, name string, timeoutSeconds int) error {
+	timeout := time.Duration(timeoutSeconds) * time.Second
+	return wait.PollUntilContextTimeout(context.Background(), 2*time.Second, timeout, false, func(ctx context.Context) (bool, error) {
+		_, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	})
+}
+
 // verifyDeploymentReplicas waits for and verifies the deployment replica count
 // Returns true if verification passes within timeout, false otherwise
 // For exact match: verifyDeploymentReplicas(oc, "deploy", "ns", 3, "")
@@ -1668,4 +1683,15 @@ func assertWaitPollNoErr(e error, msg string) {
 		err = fmt.Errorf("case: %v\nerror: %s", g.CurrentSpecReport().FullText(), e.Error())
 	}
 	o.Expect(err).NotTo(o.HaveOccurred())
+}
+
+// isWebhookTimeoutError checks if the error is a webhook timeout error
+func isWebhookTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := strings.ToLower(err.Error())
+	// Match specific webhook call timeout patterns, not generic webhook rejections
+	return (strings.Contains(errMsg, "calling webhook") || strings.Contains(errMsg, "failed calling webhook")) &&
+		(strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "deadline exceeded"))
 }
