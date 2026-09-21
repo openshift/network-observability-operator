@@ -27,11 +27,6 @@ const (
 // Defines the desired state of the FlowCollector resource.
 type FlowCollectorSpec struct {
 	// Namespace where NetObserv pods are deployed.
-	// It is recommended to keep the default setting, to avoid having to make manual adjustments to rights management.
-	// The deployed pods require specific cluster role bindings in order to operate.
-	// Those bindings are preinstalled for service accounts located in the default namespace ("netobserv").
-	// If you configured a different namespace, you must update (or recreate) the cluster role bindings accordingly.
-	// More information: https://github.com/netobserv/netobserv-operator/blob/main/README.md#customized-namespace
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Namespace is immutable. If you need to change it, delete and recreate the resource."
 	Namespace string `json:"namespace,omitempty"`
 
@@ -403,6 +398,15 @@ type FlowCollectorEBPF struct {
 	// `flowFilter` defines the eBPF agent configuration regarding flow filtering.
 	// +optional
 	FlowFilter *EBPFFlowFilter `json:"flowFilter,omitempty"`
+
+	// `dnsTrackingPorts` defines the list of DNS ports to track when DNSTracking feature is enabled.
+	// For example: [53, 5353, 8053]. Maximum 8 ports allowed.
+	// +optional
+	// +kubebuilder:validation:MaxItems:=8
+	// +kubebuilder:validation:items:Minimum:=1
+	// +kubebuilder:validation:items:Maximum:=65535
+	// +kubebuilder:default:={53,5353}
+	DNSTrackingPorts []int32 `json:"dnsTrackingPorts,omitempty"`
 }
 
 // `FlowCollectorKafka` defines the desired Kafka config of FlowCollector

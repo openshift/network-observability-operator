@@ -3,7 +3,7 @@
 ## One-time setup docsgen repo
 
 1. Clone https://github.com/jboxman-rh/openshift-apidocs-gen
-2. run `npm install -g`
+2. run `npm install && npm install -g`
 
 ## Run it
 
