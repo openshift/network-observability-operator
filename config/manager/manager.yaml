@@ -26,11 +26,11 @@ spec:
         - --leader-elect
         env:
           - name: RELATED_IMAGE_EBPF_AGENT
-            value: quay.io/netobserv/netobserv-ebpf-agent:v1.12.0-community
+            value: quay.io/netobserv/netobserv-ebpf-agent:v2.0.0-community
           - name: RELATED_IMAGE_FLOWLOGS_PIPELINE
-            value: quay.io/netobserv/flowlogs-pipeline:v1.12.0-community
+            value: quay.io/netobserv/flowlogs-pipeline:v2.0.0-community
           - name: RELATED_IMAGE_WEB_CONSOLE
-            value: quay.io/netobserv/network-observability-console-plugin:v1.12.0-community
+            value: quay.io/netobserv/network-observability-console-plugin:v2.0.0-community
           - name: RELATED_IMAGE_DEMO_LOKI
             value: grafana/loki:3.5.0
           - name: STATIC_PLUGIN_CPU_REQUEST
