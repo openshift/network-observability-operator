@@ -39,34 +39,35 @@ jobs:
         run: echo "short_sha=$(git rev-parse --short=8 HEAD)" >> $GITHUB_ENV
       - name: build images
         run: |
-          MULTIARCH_TARGETS="${{ env.WF_MULTIARCH_TARGETS }}" IMAGE_ORG=${{ env.WF_ORG }} IMAGE=${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}:${{ env.WF_VERSION }} CLEAN_BUILD=1 make image-build
-          MULTIARCH_TARGETS="${{ env.WF_MULTIARCH_TARGETS }}" IMAGE_ORG=${{ env.WF_ORG }} IMAGE=${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}:${{ env.short_sha }} CLEAN_BUILD=1 OCI_BUILD_OPTS="--label quay.expires-after=2w" make image-build
+          MULTIARCH_TARGETS="$WF_MULTIARCH_TARGETS" IMAGE_ORG="$WF_ORG" IMAGE="$WF_REGISTRY/$WF_IMAGE:$WF_VERSION" CLEAN_BUILD=1 make image-build
+          MULTIARCH_TARGETS="$WF_MULTIARCH_TARGETS" IMAGE_ORG="$WF_ORG" IMAGE="$WF_REGISTRY/$WF_IMAGE:$short_sha" CLEAN_BUILD=1 OCI_BUILD_OPTS="--label quay.expires-after=2w" make image-build
       - name: push images
         run: |
-          MULTIARCH_TARGETS="${{ env.WF_MULTIARCH_TARGETS }}" IMAGE_ORG=${{ env.WF_ORG }} IMAGE=${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}:${{ env.WF_VERSION }} make image-push
-          MULTIARCH_TARGETS="${{ env.WF_MULTIARCH_TARGETS }}" IMAGE_ORG=${{ env.WF_ORG }} IMAGE=${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}:${{ env.short_sha }} make image-push
+          MULTIARCH_TARGETS="$WF_MULTIARCH_TARGETS" IMAGE_ORG="$WF_ORG" IMAGE="$WF_REGISTRY/$WF_IMAGE:$WF_VERSION" make image-push
+          MULTIARCH_TARGETS="$WF_MULTIARCH_TARGETS" IMAGE_ORG="$WF_ORG" IMAGE="$WF_REGISTRY/$WF_IMAGE:$short_sha" make image-push
       - name: build and push manifest
         run: |
-          MULTIARCH_TARGETS="${{ env.WF_MULTIARCH_TARGETS }}" IMAGE_ORG=${{ env.WF_ORG }} IMAGE=${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}:${{ env.WF_VERSION }} make manifest-build manifest-push
-          MULTIARCH_TARGETS="${{ env.WF_MULTIARCH_TARGETS }}" IMAGE_ORG=${{ env.WF_ORG }} IMAGE=${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}:${{ env.short_sha }} make manifest-build manifest-push
+          MULTIARCH_TARGETS="$WF_MULTIARCH_TARGETS" IMAGE_ORG="$WF_ORG" IMAGE="$WF_REGISTRY/$WF_IMAGE:$WF_VERSION" make manifest-build manifest-push
+          MULTIARCH_TARGETS="$WF_MULTIARCH_TARGETS" IMAGE_ORG="$WF_ORG" IMAGE="$WF_REGISTRY/$WF_IMAGE:$short_sha" make manifest-build manifest-push
       - name: build bundle
         run: |
-          IMAGE_ORG=${{ env.WF_ORG }} \
-            VERSION=${{ env.WF_VERSION }} \
-            PLG_VERSION=${{ env.WF_VERSION }} \
-            FLP_VERSION=${{ env.WF_VERSION }} \
-            BPF_VERSION=${{ env.WF_VERSION }} \
-            BUNDLE_VERSION=0.0.0-sha-${{ env.WF_VERSION }} \
+          IMAGE_ORG="$WF_ORG" \
+            VERSION="$WF_VERSION" \
+            PLG_VERSION="$WF_VERSION" \
+            FLP_VERSION="$WF_VERSION" \
+            BPF_VERSION="$WF_VERSION" \
+            BUNDLE_VERSION="0.0.0-sha-$WF_VERSION" \
             BUNDLE_TARGET=OpenShift \
             CLEAN_BUILD=1 \
             BUNDLE_SET_DATE=true \
+            PIN_DIGEST=true \
             make bundle-nogen bundle-build
       - name: push bundle to quay.io
-        run: IMAGE_ORG=${{ env.WF_ORG }} BUNDLE_VERSION=0.0.0-sha-${{ env.WF_VERSION }} make bundle-push
+        run: IMAGE_ORG="$WF_ORG" BUNDLE_VERSION="0.0.0-sha-$WF_VERSION" make bundle-push
       - name: build catalog
-        run: IMAGE_ORG=${{ env.WF_ORG }} BUNDLE_VERSION=0.0.0-sha-${{ env.WF_VERSION }} make catalog-build
+        run: IMAGE_ORG="$WF_ORG" BUNDLE_VERSION="0.0.0-sha-$WF_VERSION" make catalog-build
       - name: push catalog to quay.io
-        run: IMAGE_ORG=${{ env.WF_ORG }} BUNDLE_VERSION=0.0.0-sha-${{ env.WF_VERSION }} make catalog-push
+        run: IMAGE_ORG="$WF_ORG" BUNDLE_VERSION="0.0.0-sha-$WF_VERSION" make catalog-push
 
   codecov:
     name: Codecov upload
