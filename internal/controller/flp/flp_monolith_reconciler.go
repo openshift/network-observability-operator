@@ -18,7 +18,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
 	"github.com/netobserv/netobserv-operator/internal/pkg/metrics/alerts"
-	"github.com/netobserv/netobserv-operator/internal/pkg/resources"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 )
 
 type monolithReconciler struct {
@@ -31,9 +31,6 @@ type monolithReconciler struct {
 	staticConfigMap  *corev1.ConfigMap
 	dynamicConfigMap *corev1.ConfigMap
 	rbConfigWatcher  *rbacv1.RoleBinding
-	rbHostNetwork    *rbacv1.ClusterRoleBinding
-	rbLokiWriter     *rbacv1.ClusterRoleBinding
-	rbInformer       *rbacv1.ClusterRoleBinding
 	serviceMonitor   *monitoringv1.ServiceMonitor
 	prometheusRule   *monitoringv1.PrometheusRule
 }
@@ -48,10 +45,7 @@ func newMonolithReconciler(cmn *reconcilers.Instance) *monolithReconciler {
 		serviceAccount:   cmn.Managed.NewServiceAccount(monoName),
 		staticConfigMap:  cmn.Managed.NewConfigMap(monoConfigMap),
 		dynamicConfigMap: cmn.Managed.NewConfigMap(monoDynConfigMap),
-		rbConfigWatcher:  cmn.Managed.NewRB(resources.GetRoleBindingName(monoShortName, constants.ConfigWatcherRole)),
-		rbHostNetwork:    cmn.Managed.NewCRB(resources.GetClusterRoleBindingName(monoShortName, constants.HostNetworkRole)),
-		rbLokiWriter:     cmn.Managed.NewCRB(resources.GetClusterRoleBindingName(monoShortName, constants.LokiWriterRole)),
-		rbInformer:       cmn.Managed.NewCRB(resources.GetClusterRoleBindingName(monoShortName, constants.FLPInformersRole)),
+		rbConfigWatcher:  cmn.Managed.NewRB(roles.GetRoleBindingName(monoShortName, roles.ConfigWatcherRole)),
 	}
 	if cmn.ClusterInfo.HasSvcMonitor() {
 		rec.serviceMonitor = cmn.Managed.NewServiceMonitor(monoServiceMonitor)
@@ -78,16 +72,20 @@ func (r *monolithReconciler) reconcile(ctx context.Context, desired *flowslatest
 		return err
 	}
 
-	if desired.Spec.OnHold() {
-		r.Status.SetUnused("FlowCollector is on hold")
-		r.Managed.TryDeleteAll(ctx)
-		return nil
+	isDelete := desired.Spec.OnHold() || desired.Spec.UseKafka()
+
+	if err := r.reconcileCRB(ctx, &desired.Spec, isDelete); err != nil {
+		return err
 	}
 
-	if desired.Spec.UseKafka() {
-		r.Status.SetUnused("Monolith only used without Kafka")
-		r.Managed.TryDeleteAll(ctx)
-		return nil
+	if isDelete {
+		if desired.Spec.OnHold() {
+			r.Status.SetUnused("FlowCollector is on hold")
+		}
+		if desired.Spec.UseKafka() {
+			r.Status.SetUnused("Monolith only used without Kafka")
+		}
+		return r.Managed.TryDeleteAll(ctx)
 	}
 
 	builder, err := newMonolithBuilder(r.Instance, &desired.Spec, flowMetrics, fcSlices, detectedSubnets)
@@ -119,12 +117,8 @@ func (r *monolithReconciler) reconcile(ctx context.Context, desired *flowslatest
 		return err
 	}
 
-	if desired.Spec.UseHostNetwork() {
-		r.Managed.TryDelete(ctx, r.service)
-	} else {
-		if err := r.reconcileService(ctx, &builder); err != nil {
-			return err
-		}
+	if err := r.reconcileOrDeleteService(ctx, &desired.Spec, &builder); err != nil {
+		return err
 	}
 
 	err = r.reconcilePrometheusService(ctx, &builder)
@@ -150,15 +144,23 @@ func (r *monolithReconciler) reconcile(ctx context.Context, desired *flowslatest
 		return err
 	}
 
-	if desired.Spec.UseHostNetwork() {
+	return r.reconcileWorkload(ctx, &desired.Spec, &builder, annotations)
+}
+
+func (r *monolithReconciler) reconcileWorkload(ctx context.Context, spec *flowslatest.FlowCollectorSpec, builder *monolithBuilder, annotations map[string]string) error {
+	if spec.UseHostNetwork() {
 		// Use DaemonSet
-		r.Managed.TryDelete(ctx, r.deployment)
+		if err := r.Managed.TryDelete(ctx, r.deployment); err != nil {
+			return err
+		}
 		return r.reconcileDaemonSet(ctx, builder.daemonSet(annotations))
 	}
 
 	// Use Deployment
-	r.Managed.TryDelete(ctx, r.daemonSet)
-	return r.reconcileDeployment(ctx, &desired.Spec.Processor, &builder, annotations)
+	if err := r.Managed.TryDelete(ctx, r.daemonSet); err != nil {
+		return err
+	}
+	return r.reconcileDeployment(ctx, &spec.Processor, builder, annotations)
 }
 
 func (r *monolithReconciler) reconcileDynamicConfigMap(ctx context.Context, newDCM *corev1.ConfigMap) error {
@@ -172,6 +174,16 @@ func (r *monolithReconciler) reconcileDynamicConfigMap(ctx context.Context, newD
 		}
 	}
 	return nil
+}
+
+// reconcileOrDeleteService reconciles the FLP Service, or deletes it when it's not needed:
+// in Direct mode, agents reach FLP directly (hostNetwork/hostPort), so no Service is needed.
+// k8scache has its own dedicated service managed by the informer reconciler.
+func (r *monolithReconciler) reconcileOrDeleteService(ctx context.Context, desired *flowslatest.FlowCollectorSpec, builder *monolithBuilder) error {
+	if desired.UseHostNetwork() {
+		return r.Managed.TryDelete(ctx, r.service)
+	}
+	return r.reconcileService(ctx, builder)
 }
 
 func (r *monolithReconciler) reconcileService(ctx context.Context, builder *monolithBuilder) error {
@@ -241,35 +253,31 @@ func (r *monolithReconciler) reconcilePermissions(ctx context.Context, builder *
 		return r.CreateOwned(ctx, builder.serviceAccount())
 	} // We only configure name, update is not needed for now
 
-	// Informers
-	r.rbInformer = resources.GetClusterRoleBinding(r.Namespace, monoShortName, monoName, monoName, constants.FLPInformersRole)
-	if err := r.ReconcileClusterRoleBinding(ctx, r.rbInformer); err != nil {
+	// Config watcher
+	r.rbConfigWatcher = roles.GetRoleBinding(r.Namespace, monoShortName, monoName, monoName, roles.ConfigWatcherRole, true)
+	if err := r.ReconcileRoleBinding(ctx, r.rbConfigWatcher); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func (r *monolithReconciler) reconcileCRB(ctx context.Context, desired *flowslatest.FlowCollectorSpec, isDelete bool) error {
 	// Host network
-	if r.ClusterInfo.IsOpenShift() && builder.desired.UseHostNetwork() {
-		r.rbHostNetwork = resources.GetClusterRoleBinding(r.Namespace, monoShortName, monoName, monoName, constants.HostNetworkRole)
-		if err := r.ReconcileClusterRoleBinding(ctx, r.rbHostNetwork); err != nil {
-			return err
-		}
-	} else {
-		r.Managed.TryDelete(ctx, r.rbHostNetwork)
+	useHostNet := r.ClusterInfo.IsOpenShift() && desired.UseHostNetwork() && !isDelete
+	if err := r.ReconcileClusterRoleBinding(ctx, r.Namespace, monoName, roles.HostNetworkRole, !useHostNet); err != nil {
+		return err
 	}
 
 	// Loki writer
-	if builder.desired.UseLoki() && builder.desired.Loki.Mode == flowslatest.LokiModeLokiStack {
-		r.rbLokiWriter = resources.GetClusterRoleBinding(r.Namespace, monoShortName, monoName, monoName, constants.LokiWriterRole)
-		if err := r.ReconcileClusterRoleBinding(ctx, r.rbLokiWriter); err != nil {
-			return err
-		}
-	} else {
-		r.Managed.TryDelete(ctx, r.rbLokiWriter)
+	useLokiWriter := desired.UseLoki() && desired.Loki.Mode == flowslatest.LokiModeLokiStack && !isDelete
+	if err := r.ReconcileClusterRoleBinding(ctx, r.Namespace, monoName, roles.LokiWriterRole, !useLokiWriter); err != nil {
+		return err
 	}
 
-	// Config watcher
-	r.rbConfigWatcher = resources.GetRoleBinding(r.Namespace, monoShortName, monoName, monoName, constants.ConfigWatcherRole, true)
-	if err := r.ReconcileRoleBinding(ctx, r.rbConfigWatcher); err != nil {
+	// Informers - when centralized informers are disabled, flowlogs-pipeline needs direct K8s API access
+	useInformers := !desired.Processor.IsInformerCacheProxyEnabled() && !isDelete
+	if err := r.ReconcileClusterRoleBinding(ctx, r.Namespace, monoName, roles.FLPInformersRole, !useInformers); err != nil {
 		return err
 	}
 

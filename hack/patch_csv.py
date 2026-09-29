@@ -62,41 +62,33 @@ else:
    podMeta['annotations'] = {'bundleCreatedAt': created_at}
 
 for env in csv['spec']['install']['spec']['deployments'][0]['spec']['template']['spec']['containers'][0]['env']:
-   if env['name'] == 'DOWNSTREAM_DEPLOYMENT':
-      env['value'] = "true"
    if env['name'] == 'RELATED_IMAGE_EBPF_AGENT':
       env['value'] = ebpf_image
    if env['name'] == 'RELATED_IMAGE_FLOWLOGS_PIPELINE':
       env['value'] = flp_image
-   if env['name'] == 'RELATED_IMAGE_CONSOLE_PLUGIN':
+   if env['name'] == 'RELATED_IMAGE_WEB_CONSOLE':
       env['value'] = console_image
-   if env['name'] == 'RELATED_IMAGE_CONSOLE_PLUGIN_PF4':
+   if env['name'] == 'RELATED_IMAGE_WEB_CONSOLE_PF4':
       env['value'] = console_pf4_image
-   if env['name'] == 'RELATED_IMAGE_CONSOLE_PLUGIN_PF5':
+   if env['name'] == 'RELATED_IMAGE_WEB_CONSOLE_PF5':
       env['value'] = console_pf5_image
    if env['name'] == 'RELATED_IMAGE_DEMO_LOKI':
       env['value'] = LOKI_IMAGE_PULLSPEC
 
 csv['spec']['install']['spec']['deployments'][0]['spec']['template']['spec']['containers'][0]['image'] = operator_image
 
-# replaces upstream description by something more OpenShift'ish
-file = open(desc_file_name,mode='r')
-csv['spec']['description'] = file.read()
-file.close()
-
 csv['spec']['displayName'] = 'Network Observability'
-csv['spec']['maturity'] = 'stable'
 
 for relatedImage in csv['spec']['relatedImages']:
    if relatedImage["name"] == "ebpf-agent":
       relatedImage["image"] = ebpf_image
    elif relatedImage["name"] == "flowlogs-pipeline":
       relatedImage["image"] = flp_image
-   elif relatedImage["name"] == "console-plugin":
+   elif relatedImage["name"] == "web-console":
       relatedImage["image"] = console_image
-   elif relatedImage["name"] == "console-plugin-pf4":
+   elif relatedImage["name"] == "web-console-pf4":
       relatedImage["image"] = console_pf4_image or console_image
-   elif relatedImage["name"] == "console-plugin-pf5":
+   elif relatedImage["name"] == "web-console-pf5":
       relatedImage["image"] = console_pf5_image or console_image
    elif relatedImage["name"] == "demo-loki":
       relatedImage["image"] = LOKI_IMAGE_PULLSPEC

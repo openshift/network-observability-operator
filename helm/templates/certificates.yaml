@@ -1,3 +1,4 @@
+# static file: this is NOT auto-generated (TODO: manage through kustomize).
 {{ if .Values.certManager.enable }}
 # NetObserv CA, based either on self-signed, or on provided issuer
 apiVersion: cert-manager.io/v1
@@ -77,6 +78,21 @@ spec:
   dnsNames:
   - flowlogs-pipeline.{{ .Release.Namespace }}.svc
   - flowlogs-pipeline.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
+  issuerRef:
+    name: netobserv-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# Certificate for k8scache client (flowlogs-pipeline-informers)
+# Note: k8scache server reuses the flowlogs-pipeline-cert certificate
+# since both gRPC ports use the same service DNS name
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: flowlogs-pipeline-informers-k8scache-client-cert
+spec:
+  secretName: flowlogs-pipeline-informers-k8scache-client-cert
+  commonName: netobserv-flowlogs-pipeline-informers
   issuerRef:
     name: netobserv-issuer
     kind: ClusterIssuer

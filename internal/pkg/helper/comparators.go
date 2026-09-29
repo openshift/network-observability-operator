@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	osv1 "github.com/openshift/api/console/v1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	ascv2 "k8s.io/api/autoscaling/v2"
@@ -54,7 +55,7 @@ func DaemonSetChanged(current, desired *appsv1.DaemonSet) ReconcileAction {
 
 func DeploymentChanged(old, n *appsv1.Deployment, contName string, report *ChangeReport) bool {
 	return report.Check("Pod changed", PodChanged(&old.Spec.Template, &n.Spec.Template, contName, report)) ||
-		report.Check("Replicas changed", *old.Spec.Replicas != *n.Spec.Replicas)
+		report.Check("Replicas changed", n.Spec.Replicas != nil && *old.Spec.Replicas != *n.Spec.Replicas)
 }
 
 func PodChanged(old, n *corev1.PodTemplateSpec, containerName string, report *ChangeReport) bool {
@@ -129,7 +130,7 @@ func volumesChanged(old, n *corev1.PodTemplateSpec, report *ChangeReport) bool {
 
 func containerChanged(old, n *corev1.Container, report *ChangeReport) bool {
 	return report.Check("Image changed", n.Image != old.Image) ||
-		report.Check("Pull policy changed", n.ImagePullPolicy != old.ImagePullPolicy) ||
+		report.Check("Pull policy changed", n.ImagePullPolicy != "" && n.ImagePullPolicy != old.ImagePullPolicy) ||
 		report.Check("Args changed", !deepEqual(n.Args, old.Args)) ||
 		report.Check("Resources req/limit changed", !deepDerivative(n.Resources, old.Resources)) ||
 		report.Check("Env changed", !deepEqual(n.Env, old.Env)) ||
@@ -156,6 +157,10 @@ func PrometheusRuleChanged(old, n *monitoringv1.PrometheusRule, report *ChangeRe
 	// Note: DeepDerivative misses changes in Spec.Groups.Rules (covered by test "Expecting PrometheusRule to exist and be updated")
 	return report.Check("PrometheusRule spec changed", !deepEqual(n.Spec, old.Spec)) ||
 		report.Check("PrometheusRule labels changed", !IsSubSet(old.Labels, n.Labels))
+}
+
+func ConsolePluginChanged(old, n *osv1.ConsolePlugin, report *ChangeReport) bool {
+	return report.Check("ConsolePlugin spec changed", !deepDerivative(n.Spec, old.Spec))
 }
 
 // FindContainer searches in pod containers one that matches the provided name

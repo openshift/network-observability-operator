@@ -10,6 +10,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -92,12 +93,19 @@ func TestGetEnvConfig_Default(t *testing.T) {
 	fc := flowslatest.FlowCollector{
 		Spec: flowslatest.FlowCollectorSpec{
 			Agent: flowslatest.FlowCollectorAgent{
-				EBPF: flowslatest.FlowCollectorEBPF{},
+				EBPF: flowslatest.FlowCollectorEBPF{
+					// DNSTrackingPorts will have default value [53, 5353] from API
+					DNSTrackingPorts: []int32{53, 5353},
+				},
 			},
 		},
 	}
+	info := reconcilers.Common{Namespace: "netobserv", ClusterInfo: &cluster.Info{}}
+	agent := NewAgentController(info.NewInstance(nil, status.Instance{}))
 
-	env := getEnvConfig(&fc, &cluster.Info{})
+	env, err := agent.envConfig(context.Background(), &fc, map[string]string{})
+	require.NoError(t, err)
+
 	assert.Equal(t, []corev1.EnvVar{
 		{Name: "METRICS_ENABLE", Value: "true"},
 		{Name: "METRICS_SERVER_PORT", Value: "9400"},
@@ -109,10 +117,16 @@ func TestGetEnvConfig_Default(t *testing.T) {
 					FieldPath:  "status.hostIP",
 				},
 			}},
-		{Name: "DNS_TRACKING_PORT", Value: "53"},
+		{Name: "DNS_TRACKING_PORT", Value: "53,5353"},
 		{Name: "NETWORK_EVENTS_MONITORING_GROUP_ID", Value: "10"},
 		{Name: "PREFERRED_INTERFACE_FOR_MAC_PREFIX", Value: "0a:58=eth0"},
 		{Name: "TC_ATTACH_MODE", Value: "tcx"},
+		{Name: "EXPORT", Value: "grpc"},
+		{Name: "TARGET_TLS_CA_CERT_PATH", Value: "/var/netobserv-ca/service-ca.crt"},
+		{Name: "TARGET_HOST", Value: "flowlogs-pipeline.netobserv.svc.cluster.local."},
+		{Name: "TARGET_PORT", Value: "0"},
+		{Name: "GRPC_RECONNECT_TIMER", Value: "5m"},
+		{Name: "GRPC_RECONNECT_TIMER_RANDOMIZATION", Value: "30s"},
 	}, env)
 }
 
@@ -127,6 +141,7 @@ func TestGetEnvConfig_WithOverrides(t *testing.T) {
 							"DNS_TRACKING_PORT":                  "5353",
 							"NETWORK_EVENTS_MONITORING_GROUP_ID": "any",
 							"TC_ATTACH_MODE":                     "any",
+							"TARGET_HOST":                        "test",
 						},
 					},
 					Resources: corev1.ResourceRequirements{
@@ -149,8 +164,17 @@ func TestGetEnvConfig_WithOverrides(t *testing.T) {
 		},
 	}
 
-	env := getEnvConfig(&fc, &cluster.Info{})
+	info := reconcilers.Common{Namespace: "netobserv", ClusterInfo: &cluster.Info{}}
+	agent := NewAgentController(info.NewInstance(nil, status.Instance{}))
+
+	env, err := agent.envConfig(context.Background(), &fc, map[string]string{})
+	require.NoError(t, err)
 	assert.Equal(t, []corev1.EnvVar{
+		{Name: "DNS_TRACKING_PORT", Value: "5353"},
+		{Name: "NETWORK_EVENTS_MONITORING_GROUP_ID", Value: "any"},
+		{Name: "PREFERRED_INTERFACE_FOR_MAC_PREFIX", Value: "0a:58=ens5"},
+		{Name: "TARGET_HOST", Value: "test"},
+		{Name: "TC_ATTACH_MODE", Value: "any"},
 		{Name: "GOMEMLIMIT", Value: "754974720"},
 		{Name: "FLOW_FILTER_RULES", Value: `[{"ip_cidr":"0.0.0.0/0","action":"Accept"}]`},
 		{Name: "AGENT_IP", Value: "",
@@ -160,10 +184,11 @@ func TestGetEnvConfig_WithOverrides(t *testing.T) {
 					FieldPath:  "status.hostIP",
 				},
 			}},
-		{Name: "DNS_TRACKING_PORT", Value: "5353"},
-		{Name: "NETWORK_EVENTS_MONITORING_GROUP_ID", Value: "any"},
-		{Name: "PREFERRED_INTERFACE_FOR_MAC_PREFIX", Value: "0a:58=ens5"},
-		{Name: "TC_ATTACH_MODE", Value: "any"},
+		{Name: "EXPORT", Value: "grpc"},
+		{Name: "TARGET_TLS_CA_CERT_PATH", Value: "/var/netobserv-ca/service-ca.crt"},
+		{Name: "TARGET_PORT", Value: "0"},
+		{Name: "GRPC_RECONNECT_TIMER", Value: "5m"},
+		{Name: "GRPC_RECONNECT_TIMER_RANDOMIZATION", Value: "30s"},
 	}, env)
 }
 
@@ -171,14 +196,22 @@ func TestGetEnvConfig_OCP4_14(t *testing.T) {
 	fc := flowslatest.FlowCollector{
 		Spec: flowslatest.FlowCollectorSpec{
 			Agent: flowslatest.FlowCollectorAgent{
-				EBPF: flowslatest.FlowCollectorEBPF{},
+				EBPF: flowslatest.FlowCollectorEBPF{
+					// DNSTrackingPorts will have default value [53, 5353] from API
+					DNSTrackingPorts: []int32{53, 5353},
+				},
 			},
 		},
 	}
 
-	info := cluster.Info{}
-	info.Mock("4.14.5", "")
-	env := getEnvConfig(&fc, &info)
+	cmn := reconcilers.Common{
+		Namespace:   "netobserv",
+		ClusterInfo: cluster.Mock(cluster.WithOpenShiftVersion("4.15.5")),
+	}
+	agent := NewAgentController(cmn.NewInstance(nil, status.Instance{}))
+
+	env, err := agent.envConfig(context.Background(), &fc, map[string]string{})
+	require.NoError(t, err)
 	assert.Equal(t, []corev1.EnvVar{
 		{Name: "METRICS_ENABLE", Value: "true"},
 		{Name: "METRICS_SERVER_PORT", Value: "9400"},
@@ -190,11 +223,60 @@ func TestGetEnvConfig_OCP4_14(t *testing.T) {
 					FieldPath:  "status.hostIP",
 				},
 			}},
-		{Name: "DNS_TRACKING_PORT", Value: "53"},
+		{Name: "DNS_TRACKING_PORT", Value: "53,5353"},
 		{Name: "NETWORK_EVENTS_MONITORING_GROUP_ID", Value: "10"},
 		{Name: "PREFERRED_INTERFACE_FOR_MAC_PREFIX", Value: "0a:58=eth0"},
 		{Name: "TC_ATTACH_MODE", Value: "tc"},
+		{Name: "EXPORT", Value: "grpc"},
+		{Name: "TARGET_TLS_CA_CERT_PATH", Value: "/var/netobserv-ca/service-ca.crt"},
+		{Name: "TARGET_HOST", Value: "flowlogs-pipeline.netobserv.svc.cluster.local."},
+		{Name: "TARGET_PORT", Value: "0"},
+		{Name: "GRPC_RECONNECT_TIMER", Value: "5m"},
+		{Name: "GRPC_RECONNECT_TIMER_RANDOMIZATION", Value: "30s"},
 	}, env)
+}
+
+func TestGetEnvConfig_WithDNSTrackingPorts(t *testing.T) {
+	fc := flowslatest.FlowCollector{
+		Spec: flowslatest.FlowCollectorSpec{
+			Agent: flowslatest.FlowCollectorAgent{
+				EBPF: flowslatest.FlowCollectorEBPF{
+					DNSTrackingPorts: []int32{53, 5353, 8053},
+				},
+			},
+		},
+	}
+	info := reconcilers.Common{Namespace: "netobserv", ClusterInfo: &cluster.Info{}}
+	agent := NewAgentController(info.NewInstance(nil, status.Instance{}))
+
+	env, err := agent.envConfig(context.Background(), &fc, map[string]string{})
+	require.NoError(t, err)
+
+	assert.Contains(t, env, corev1.EnvVar{Name: "DNS_TRACKING_PORT", Value: "53,5353,8053"})
+}
+
+func TestGetEnvConfig_DNSPortsAdvancedOverride(t *testing.T) {
+	fc := flowslatest.FlowCollector{
+		Spec: flowslatest.FlowCollectorSpec{
+			Agent: flowslatest.FlowCollectorAgent{
+				EBPF: flowslatest.FlowCollectorEBPF{
+					DNSTrackingPorts: []int32{53},
+					Advanced: &flowslatest.AdvancedAgentConfig{
+						Env: map[string]string{
+							"DNS_TRACKING_PORT": "9053", // Override
+						},
+					},
+				},
+			},
+		},
+	}
+	info := reconcilers.Common{Namespace: "netobserv", ClusterInfo: &cluster.Info{}}
+	agent := NewAgentController(info.NewInstance(nil, status.Instance{}))
+
+	env, err := agent.envConfig(context.Background(), &fc, map[string]string{})
+	require.NoError(t, err)
+
+	assert.Contains(t, env, corev1.EnvVar{Name: "DNS_TRACKING_PORT", Value: "9053"})
 }
 
 func TestBpfmanConfig(t *testing.T) {
@@ -218,7 +300,7 @@ func TestBpfmanConfig(t *testing.T) {
 	assert.Equal(t, corev1.EnvVar{Name: "EBPF_PROGRAM_MANAGER_MODE", Value: "true"}, ds.Spec.Template.Spec.Containers[0].Env[0])
 	assert.Equal(t, "bpfman-maps", ds.Spec.Template.Spec.Volumes[1].Name)
 	assert.Equal(t, map[string]string{
-		"csi.bpfman.io/maps":    "direct_flows,aggregated_flows,aggregated_flows_dns,aggregated_flows_pkt_drop,aggregated_flows_network_events,aggregated_flows_xlat,additional_flow_metrics,packet_record,dns_flows,global_counters,filter_map,peer_filter_map,ipsec_ingress_map,ipsec_egress_map,ssl_data_event_map,dns_name_map",
+		"csi.bpfman.io/maps":    "direct_flows,aggregated_flows,aggregated_flows_dns,aggregated_flows_pkt_drop,aggregated_flows_network_events,aggregated_flows_xlat,additional_flow_metrics,packet_record,dns_flows,global_counters,filter_map,peer_filter_map,ipsec_ingress_map,ipsec_egress_map,ssl_data_event_map,dns_name_map,quic_flows",
 		"csi.bpfman.io/program": "netobserv",
 	}, ds.Spec.Template.Spec.Volumes[1].CSI.VolumeAttributes)
 }
@@ -247,7 +329,7 @@ func TestNetworkEventsOVNMount(t *testing.T) {
 	assert.Equal(t, "/var/run/openvswitch", ds.Spec.Template.Spec.Volumes[2].HostPath.Path)
 
 	// OpenShift OVN
-	info.ClusterInfo.Mock("4.20.0", flowslatest.OVNKubernetes)
+	info.ClusterInfo = cluster.Mock(cluster.WithOpenShiftVersion("4.20.0"), cluster.WithCNI(flowslatest.OVNKubernetes))
 	ds, err = agent.desired(context.Background(), &fc)
 	assert.NoError(t, err)
 	assert.NotNil(t, ds)

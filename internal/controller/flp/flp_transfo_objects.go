@@ -54,6 +54,9 @@ func newTransfoBuilder(info *reconcilers.Instance, desired *flowslatest.FlowColl
 }
 
 func (b *transfoBuilder) deployment(annotations map[string]string) *appsv1.Deployment {
+	if b.info.ClusterInfo.IsOpenShift() {
+		annotations[constants.OpenShiftReqSCCAnnotation] = constants.OpenShiftReqSCCAnnotationDefaultValue
+	}
 	pod := podTemplate(
 		transfoName,
 		b.version,
@@ -63,6 +66,8 @@ func (b *transfoBuilder) deployment(annotations map[string]string) *appsv1.Deplo
 		&b.volumes,
 		pull,
 		annotations,
+		b.info.ClusterInfo.IsOpenShift(),
+		b.info.TLSConfig,
 	)
 	replicas := b.desired.Processor.GetFLPReplicas()
 	return &appsv1.Deployment{
@@ -88,6 +93,7 @@ func (b *transfoBuilder) deployment(annotations map[string]string) *appsv1.Deplo
 func (b *transfoBuilder) configMaps() (*corev1.ConfigMap, string, *corev1.ConfigMap, error) {
 	pipeline, err := createPipeline(
 		b.desired,
+		b.info.Namespace,
 		b.flowMetrics,
 		b.fcSlices,
 		b.detectedSubnets,
@@ -101,7 +107,7 @@ func (b *transfoBuilder) configMaps() (*corev1.ConfigMap, string, *corev1.Config
 	}
 
 	// Get static and dynamic CM
-	static, dynamic, err := getJSONConfigs(b.desired, &b.volumes, b.promTLS, pipeline, transfoDynConfigMap)
+	static, dynamic, err := getJSONConfigs(b.desired, b.info.Namespace, &b.volumes, b.promTLS, pipeline, transfoDynConfigMap)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -142,9 +148,12 @@ func (b *transfoBuilder) autoScaler() *ascv2.HorizontalPodAutoscaler {
 				Kind:       "Deployment",
 				Name:       transfoName,
 			},
+			//nolint:staticcheck
 			MinReplicas: b.desired.Processor.KafkaConsumerAutoscaler.MinReplicas,
+			//nolint:staticcheck
 			MaxReplicas: b.desired.Processor.KafkaConsumerAutoscaler.MaxReplicas,
-			Metrics:     b.desired.Processor.KafkaConsumerAutoscaler.Metrics,
+			//nolint:staticcheck
+			Metrics: b.desired.Processor.KafkaConsumerAutoscaler.Metrics,
 		},
 	}
 }
@@ -170,7 +179,6 @@ func (b *transfoBuilder) serviceMonitor() *monitoringv1.ServiceMonitor {
 		b.info.Namespace,
 		transfoName,
 		b.version,
-		b.info.IsDownstream,
 		b.info.ClusterInfo.HasPromServiceDiscoveryRole(),
 	)
 }

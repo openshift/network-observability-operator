@@ -53,12 +53,7 @@ Resource Types:
         <td><b><a href="#flowcollectorspec">spec</a></b></td>
         <td>object</td>
         <td>
-          Defines the desired state of the FlowCollector resource.
-<br><br>
-*: the mention of "unsupported" or "deprecated" for a feature throughout this document means that this feature
-is not officially supported by Red Hat. It might have been, for example, contributed by the community
-and accepted without a formal agreement for maintenance. The product maintainers might provide some support
-for these features as a best effort only.<br/>
+          Defines the desired state of the FlowCollector resource.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -78,11 +73,6 @@ for these features as a best effort only.<br/>
 
 
 Defines the desired state of the FlowCollector resource.
-<br><br>
-*: the mention of "unsupported" or "deprecated" for a feature throughout this document means that this feature
-is not officially supported by Red Hat. It might have been, for example, contributed by the community
-and accepted without a formal agreement for maintenance. The product maintainers might provide some support
-for these features as a best effort only.
 
 <table>
     <thead>
@@ -104,7 +94,7 @@ for these features as a best effort only.
         <td><b><a href="#flowcollectorspecconsoleplugin">consolePlugin</a></b></td>
         <td>object</td>
         <td>
-          `consolePlugin` defines the settings related to the OpenShift Console plugin, when available.<br/>
+          `consolePlugin` defines the settings related to the Web Console.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -157,7 +147,6 @@ Kafka can provide better scalability, resiliency, and high availability (for mor
           Namespace where NetObserv pods are deployed.<br/>
           <br/>
             <i>Validations</i>:<li>self == oldSelf: Namespace is immutable. If you need to change it, delete and recreate the resource.</li>
-            <i>Default</i>: netobserv<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -206,23 +195,25 @@ Agent configuration for flows extraction.
         <td><b><a href="#flowcollectorspecagentebpf">ebpf</a></b></td>
         <td>object</td>
         <td>
-          `ebpf` describes the settings related to the eBPF-based flow reporter when `spec.agent.type`
-is set to `eBPF`.<br/>
+          `ebpf` describes the settings related to the eBPF-based flow reporter when `spec.agent.type` is set to `eBPF`.<br/>
         </td>
         <td>false</td>
       </tr><tr>
         <td><b><a href="#flowcollectorspecagentipfix">ipfix</a></b></td>
         <td>object</td>
         <td>
-          `ipfix` [deprecated (*)] - describes the settings related to the IPFIX-based flow reporter when `spec.agent.type`
-is set to `IPFIX`.<br/>
+          `ipfix` describes the settings related to the IPFIX-based flow reporter when `spec.agent.type` is set to `IPFIX`.
+
+Deprecated: only `eBPF` remains supported.<br/>
         </td>
         <td>false</td>
       </tr><tr>
         <td><b>type</b></td>
         <td>enum</td>
         <td>
-          `type` [deprecated (*)] selects the flows tracing agent. Previously, this field allowed to select between `eBPF` or `IPFIX`.
+          `type` selects the flows tracing agent.
+
+Deprecated: Previously, this field allowed to select between `eBPF` or `IPFIX`.
 Only `eBPF` is allowed now, so this field is deprecated and is planned for removal in a future version of the API.<br/>
           <br/>
             <i>Enum</i>: eBPF, IPFIX<br/>
@@ -238,8 +229,7 @@ Only `eBPF` is allowed now, so this field is deprecated and is planned for remov
 
 
 
-`ebpf` describes the settings related to the eBPF-based flow reporter when `spec.agent.type`
-is set to `eBPF`.
+`ebpf` describes the settings related to the eBPF-based flow reporter when `spec.agent.type` is set to `eBPF`.
 
 <table>
     <thead>
@@ -285,6 +275,16 @@ however you can expect higher memory consumption and an increased latency in the
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>dnsTrackingPorts</b></td>
+        <td>[]integer</td>
+        <td>
+          `dnsTrackingPorts` defines the list of DNS ports to track when DNSTracking feature is enabled.
+For example: [53, 5353, 8053]. Maximum 8 ports allowed.<br/>
+          <br/>
+            <i>Default</i>: [53 5353]<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>excludeInterfaces</b></td>
         <td>[]string</td>
         <td>
@@ -306,15 +306,14 @@ the kernel debug filesystem, so the eBPF agent pods must run as privileged via `
 - `FlowRTT`: Enable flow latency (sRTT) extraction in the eBPF agent from TCP traffic.<br>
 - `NetworkEvents`: Enable the network events monitoring feature, such as correlating flows and network policies.
 This feature requires mounting the kernel debug filesystem, so the eBPF agent pods must run as privileged via `spec.agent.ebpf.privileged`.
-It requires using the OVN-Kubernetes network plugin with the Observability feature.
-IMPORTANT: This feature is available as a Technology Preview.<br>
+It requires using the OVN-Kubernetes network plugin with the Observability feature.<br>
 - `PacketTranslation`: Enable enriching flows with packet translation information, such as Service NAT.<br>
-- `EbpfManager`: [Unsupported (*)]. Use eBPF Manager to manage NetObserv eBPF programs. Pre-requisite: the eBPF Manager operator (or upstream bpfman operator) must be installed.<br>
-- `UDNMapping`: Enable interfaces mapping to User Defined Networks (UDN). <br>
+- `EbpfManager`: Use eBPF Manager to manage NetObserv eBPF programs. Pre-requisite: the eBPF Manager operator (or upstream bpfman operator) must be installed.<br>
+- `UDNMapping`: Enable interfaces mapping to User Defined Networks (UDN).<br>
 This feature requires mounting the kernel debug filesystem, so the eBPF agent pods must run as privileged via `spec.agent.ebpf.privileged`.
-It requires using the OVN-Kubernetes network plugin with the Observability feature. <br>
-- `IPSec`, to track flows between nodes with IPsec encryption. <br>
-- `TLSTracking`, to track TLS usage. <br><br/>
+It requires using the OVN-Kubernetes network plugin.<br>
+- `IPSec`, to track flows between nodes with IPsec encryption.<br>
+- `TLSTracking`, to track TLS usage.<br><br/>
           <br/>
             <i>Enum</i>: PacketDrop, DNSTracking, FlowRTT, NetworkEvents, PacketTranslation, EbpfManager, UDNMapping, IPSec, TLSTracking<br/>
         </td>
@@ -2564,6 +2563,15 @@ Metrics server endpoint configuration for the Prometheus scraper.
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>scrapeInterval</b></td>
+        <td>string</td>
+        <td>
+          Prometheus scraping interval, how often metrics are pulled.<br/>
+          <br/>
+            <i>Format</i>: duration<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#flowcollectorspecagentebpfmetricsservertls">tls</a></b></td>
         <td>object</td>
         <td>
@@ -2596,8 +2604,9 @@ TLS configuration.
         <td>
           Select the type of TLS configuration:<br>
 - `Disabled` (default) to not configure TLS for the endpoint.
-- `Provided` to manually provide cert file and a key file. [Unsupported (*)].
-- `Auto` to use OpenShift auto generated certificate using annotations.<br/>
+- `Provided` to manually provide cert file and a key file.
+- `Auto` to use a default certificate, which may vary depending on the Kubernetes vendor.
+Refer to https://github.com/netobserv/netobserv-operator/blob/main/docs/TLS.md for more information.<br/>
           <br/>
             <i>Enum</i>: Disabled, Provided, Auto<br/>
             <i>Default</i>: Disabled<br/>
@@ -2608,7 +2617,7 @@ TLS configuration.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the provided certificate.
-If set to `true`, the `providedCaFile` field is ignored.<br/>
+If set to `true`, the `providedCaFile` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -2839,8 +2848,9 @@ only the result of this request.<br/>
 
 
 
-`ipfix` [deprecated (*)] - describes the settings related to the IPFIX-based flow reporter when `spec.agent.type`
-is set to `IPFIX`.
+`ipfix` describes the settings related to the IPFIX-based flow reporter when `spec.agent.type` is set to `IPFIX`.
+
+Deprecated: only `eBPF` remains supported.
 
 <table>
     <thead>
@@ -2875,7 +2885,7 @@ is set to `IPFIX`.
         <td><b><a href="#flowcollectorspecagentipfixclusternetworkoperator">clusterNetworkOperator</a></b></td>
         <td>object</td>
         <td>
-          `clusterNetworkOperator` defines the settings related to the OpenShift Cluster Network Operator, when available.<br/>
+          `clusterNetworkOperator` defines the settings related to the Cluster Network Operator, when available.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -2894,7 +2904,8 @@ When it is set to `true`, the value of `sampling` is ignored.<br/>
         <td><b><a href="#flowcollectorspecagentipfixovnkubernetes">ovnKubernetes</a></b></td>
         <td>object</td>
         <td>
-          `ovnKubernetes` defines the settings of the OVN-Kubernetes network plugin, when available. This configuration is used when using OVN's IPFIX exports, without OpenShift. When using OpenShift, refer to the `clusterNetworkOperator` property instead.<br/>
+          `ovnKubernetes` defines the settings of the OVN-Kubernetes network plugin, when available.
+This configuration is used when using upstream OVN's IPFIX exports.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -2920,7 +2931,7 @@ refer to `forceSampleAll`. Alternatively, you can use the eBPF Agent instead of 
 
 
 
-`clusterNetworkOperator` defines the settings related to the OpenShift Cluster Network Operator, when available.
+`clusterNetworkOperator` defines the settings related to the Cluster Network Operator, when available.
 
 <table>
     <thead>
@@ -2936,8 +2947,6 @@ refer to `forceSampleAll`. Alternatively, you can use the eBPF Agent instead of 
         <td>string</td>
         <td>
           Namespace  where the config map is going to be deployed.<br/>
-          <br/>
-            <i>Default</i>: openshift-network-operator<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -2949,7 +2958,8 @@ refer to `forceSampleAll`. Alternatively, you can use the eBPF Agent instead of 
 
 
 
-`ovnKubernetes` defines the settings of the OVN-Kubernetes network plugin, when available. This configuration is used when using OVN's IPFIX exports, without OpenShift. When using OpenShift, refer to the `clusterNetworkOperator` property instead.
+`ovnKubernetes` defines the settings of the OVN-Kubernetes network plugin, when available.
+This configuration is used when using upstream OVN's IPFIX exports.
 
 <table>
     <thead>
@@ -2996,7 +3006,7 @@ refer to `forceSampleAll`. Alternatively, you can use the eBPF Agent instead of 
 
 
 
-`consolePlugin` defines the settings related to the OpenShift Console plugin, when available.
+`consolePlugin` defines the settings related to the Web Console.
 
 <table>
     <thead>
@@ -3020,8 +3030,9 @@ such as `GOGC` and `GOMAXPROCS` environment variables. Set these values at your 
         <td><b><a href="#flowcollectorspecconsolepluginautoscaler">autoscaler</a></b></td>
         <td>object</td>
         <td>
-          `autoscaler` [deprecated (*)] spec of a horizontal pod autoscaler to set up for the plugin Deployment.
-Deprecation notice: managed autoscaler will be removed in a future version. You may configure instead an autoscaler of your choice, and set `spec.consolePlugin.unmanagedReplicas` to `true`.<br/>
+          `autoscaler`: spec of a horizontal pod autoscaler to set up for the web console Deployment.
+
+Deprecated: managed autoscaler will be removed in a future version. You may configure instead an autoscaler of your choice, and set `spec.consolePlugin.unmanagedReplicas` to `true`.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -3047,7 +3058,7 @@ Deprecation notice: managed autoscaler will be removed in a future version. You 
         <td><b>logLevel</b></td>
         <td>enum</td>
         <td>
-          `logLevel` for the console plugin backend.<br/>
+          `logLevel` for the web console backend.<br/>
           <br/>
             <i>Enum</i>: trace, debug, info, warn, error, fatal, panic<br/>
             <i>Default</i>: info<br/>
@@ -3066,7 +3077,7 @@ Deprecation notice: managed autoscaler will be removed in a future version. You 
         <td><b><a href="#flowcollectorspecconsolepluginquickfiltersindex">quickFilters</a></b></td>
         <td>[]object</td>
         <td>
-          `quickFilters` configures quick filter presets for the Console plugin.
+          `quickFilters` configures quick filter presets for the web console.
 Filters for external traffic assume the subnet labels are configured to distinguish internal and external traffic (see `spec.processor.subnetLabels`).<br/>
           <br/>
             <i>Default</i>: [map[default:true filter:map[flow_layer:"app"] name:Applications] map[filter:map[flow_layer:"infra"] name:Infrastructure] map[default:true filter:map[dst_kind:"Pod" src_kind:"Pod"] name:Pods network] map[filter:map[dst_kind:"Service"] name:Services network] map[filter:map[src_subnet_label:"",EXT:] name:External ingress] map[filter:map[dst_subnet_label:"",EXT:] name:External egress]]<br/>
@@ -3097,9 +3108,7 @@ For more information, see https://kubernetes.io/docs/concepts/configuration/mana
         <td><b>standalone</b></td>
         <td>boolean</td>
         <td>
-          Deploy as a standalone console, instead of a plugin of the OpenShift Console.
-This is not recommended when using with OpenShift, as it doesn't provide an integrated experience.
-[Unsupported (*)].<br/>
+          Deploy as a standalone console. Supported vendors may use a plugin system instead.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -3167,9 +3176,8 @@ in edge debug or support scenarios.<br/>
         <td><b>register</b></td>
         <td>boolean</td>
         <td>
-          `register` allows, when set to `true`, to automatically register the provided console plugin with the OpenShift Console operator.
-When set to `false`, you can still register it manually by editing console.operator.openshift.io/cluster with the following command:
-`oc patch console.operator.openshift.io cluster --type='json' -p '[{"op": "add", "path": "/spec/plugins/-", "value": "netobserv-plugin"}]'`<br/>
+          `register` allows, when set to `true`, to automatically register the console plugin when possible, depending on the vendor.
+It requires `spec.consolePlugin.standalone` to be `false`.<br/>
           <br/>
             <i>Default</i>: true<br/>
         </td>
@@ -4930,8 +4938,9 @@ If the operator is Exists, the value should be empty, otherwise just a regular s
 
 
 
-`autoscaler` [deprecated (*)] spec of a horizontal pod autoscaler to set up for the plugin Deployment.
-Deprecation notice: managed autoscaler will be removed in a future version. You may configure instead an autoscaler of your choice, and set `spec.consolePlugin.unmanagedReplicas` to `true`.
+`autoscaler`: spec of a horizontal pod autoscaler to set up for the web console Deployment.
+
+Deprecated: managed autoscaler will be removed in a future version. You may configure instead an autoscaler of your choice, and set `spec.consolePlugin.unmanagedReplicas` to `true`.
 
 <table>
     <thead>
@@ -6211,7 +6220,7 @@ Accepted values are: `none` (default), `gzip`, `snappy`, `lz4`, `zstd`.<br/>
         <td><b><a href="#flowcollectorspecexportersindexkafkasasl">sasl</a></b></td>
         <td>object</td>
         <td>
-          SASL authentication configuration. [Unsupported (*)].<br/>
+          SASL authentication configuration.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -6219,7 +6228,10 @@ Accepted values are: `none` (default), `gzip`, `snappy`, `lz4`, `zstd`.<br/>
         <td>object</td>
         <td>
           TLS and mTLS client configuration. When using TLS, verify that the address matches the Kafka port used for TLS, generally 9093.
-We recommend the use of mTLS for higher security standards.<br/>
+We recommend the use of mTLS for higher security standards.
+When configuring TLS, the operator watches the certificate secret and copies it to both the netobserv and netobserv-privileged namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Kafka configuration documentation for more information.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -6231,7 +6243,7 @@ We recommend the use of mTLS for higher security standards.<br/>
 
 
 
-SASL authentication configuration. [Unsupported (*)].
+SASL authentication configuration.
 
 <table>
     <thead>
@@ -6383,6 +6395,9 @@ If the namespace is different, the config map or the secret is copied so that it
 
 TLS and mTLS client configuration. When using TLS, verify that the address matches the Kafka port used for TLS, generally 9093.
 We recommend the use of mTLS for higher security standards.
+When configuring TLS, the operator watches the certificate secret and copies it to both the netobserv and netobserv-privileged namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Kafka configuration documentation for more information.
 
 <table>
     <thead>
@@ -6414,7 +6429,7 @@ We recommend the use of mTLS for higher security standards.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the server certificate.
-If set to `true`, the `caCert` field is ignored.<br/>
+If set to `true`, the `caCert` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -6779,7 +6794,7 @@ TLS client configuration.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the server certificate.
-If set to `true`, the `caCert` field is ignored.<br/>
+If set to `true`, the `caCert` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -6964,7 +6979,7 @@ Accepted values are: `none` (default), `gzip`, `snappy`, `lz4`, `zstd`.<br/>
         <td><b><a href="#flowcollectorspeckafkasasl">sasl</a></b></td>
         <td>object</td>
         <td>
-          SASL authentication configuration. [Unsupported (*)].<br/>
+          SASL authentication configuration.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -6972,7 +6987,10 @@ Accepted values are: `none` (default), `gzip`, `snappy`, `lz4`, `zstd`.<br/>
         <td>object</td>
         <td>
           TLS and mTLS client configuration. When using TLS, verify that the address matches the Kafka port used for TLS, generally 9093.
-We recommend the use of mTLS for higher security standards.<br/>
+We recommend the use of mTLS for higher security standards.
+When configuring TLS, the operator watches the certificate secret and copies it to both the netobserv and netobserv-privileged namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Kafka configuration documentation for more information.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -6984,7 +7002,7 @@ We recommend the use of mTLS for higher security standards.<br/>
 
 
 
-SASL authentication configuration. [Unsupported (*)].
+SASL authentication configuration.
 
 <table>
     <thead>
@@ -7136,6 +7154,9 @@ If the namespace is different, the config map or the secret is copied so that it
 
 TLS and mTLS client configuration. When using TLS, verify that the address matches the Kafka port used for TLS, generally 9093.
 We recommend the use of mTLS for higher security standards.
+When configuring TLS, the operator watches the certificate secret and copies it to both the netobserv and netobserv-privileged namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Kafka configuration documentation for more information.
 
 <table>
     <thead>
@@ -7167,7 +7188,7 @@ We recommend the use of mTLS for higher security standards.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the server certificate.
-If set to `true`, the `caCert` field is ignored.<br/>
+If set to `true`, the `caCert` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -7454,7 +7475,7 @@ This section is aimed mostly for debugging and fine-grained performance optimiza
         <td><b>excludeLabels</b></td>
         <td>[]string</td>
         <td>
-          `excludeLabels` is a list of fields to be excluded from the list of Loki labels. [Unsupported (*)].<br/>
+          `excludeLabels` is a list of fields to be excluded from the list of Loki labels.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -7529,7 +7550,10 @@ It is ignored for other modes.
         <td><b>namespace</b></td>
         <td>string</td>
         <td>
-          Namespace where this `LokiStack` resource is located. If omitted, it is assumed to be the same as `spec.namespace`.<br/>
+          Namespace where this `LokiStack` resource is located. If omitted, it is assumed to be the same as `spec.namespace`.
+When configuring a different namespace, the operator watches certificate secret and copies it to the netobserv main namespaces.
+In order to do so, you must grant it permissions to the `netobserv-secret-watcher` and `netobserv-secret-creator` roles in the corresponding namespaces.
+Refer to the Loki configuration documentation for more information.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -7560,7 +7584,7 @@ It is ignored for other modes.
           `authToken` describes the way to get a token to authenticate to Loki.<br>
 - `Disabled` does not send any token with the request.<br>
 - `Forward` forwards the user token for authorization.<br>
-- `Host` [deprecated (*)] - uses the local pod service account to authenticate to Loki.<br>
+- `Host` (deprecated) - uses the local pod service account to authenticate to Loki.<br>
 When using the Loki Operator, this must be set to `Forward`.<br/>
           <br/>
             <i>Enum</i>: Disabled, Host, Forward<br/>
@@ -7666,7 +7690,7 @@ TLS client configuration for Loki status URL.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the server certificate.
-If set to `true`, the `caCert` field is ignored.<br/>
+If set to `true`, the `caCert` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -7839,7 +7863,7 @@ TLS client configuration for Loki URL.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the server certificate.
-If set to `true`, the `caCert` field is ignored.<br/>
+If set to `true`, the `caCert` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -8068,7 +8092,7 @@ TLS client configuration for Loki URL.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the server certificate.
-If set to `true`, the `caCert` field is ignored.<br/>
+If set to `true`, the `caCert` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -8227,8 +8251,7 @@ It is ignored for other modes.
         <td>boolean</td>
         <td>
           Set `installDemoLoki` to `true` to automatically create Loki deployment, service and storage.
-This is useful for development and demo purposes. Do not use it in production.
-[Unsupported (*)].<br/>
+This is meant for development and demo use only, and not recommended in production.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -8299,7 +8322,7 @@ TLS client configuration for Loki URL.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the server certificate.
-If set to `true`, the `caCert` field is ignored.<br/>
+If set to `true`, the `caCert` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -8464,11 +8487,15 @@ configuration, you can disable it and install your own instead.<br/>
         <td><b>enable</b></td>
         <td>boolean</td>
         <td>
-          Deploys network policies on the namespaces used by NetObserv (main and privileged).
+          Deploys network policies on the namespaces used by NetObserv operands (main and privileged).
 These network policies better isolate the NetObserv components to prevent undesired connections from and to them.
 Because it cannot be tested with all CNIs, this option is only enabled by default when NetObserv runs in a known
 supported environment, and it is disabled by default otherwise.
 When disabled, it is highly recommended to create network policies manually, to prevent undesired accesses.
+This setting is for operands only, and does not control the Operator network policy, which is covered by the `OPERATOR_NETWORK_POLICY`
+environment variable.
+If the operator and the operands are deployed in the same namespace, this setting is ignored, and only `OPERATOR_NETWORK_POLICY` controls
+whether or not any policy is installed.
 More information: https://github.com/netobserv/netobserv-operator/blob/main/docs/NetworkPolicy.md.<br/>
         </td>
         <td>false</td>
@@ -8511,10 +8538,19 @@ such as `GOGC` and `GOMAXPROCS` environment variables. Set these values at your 
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>bgpEnrichment</b></td>
+        <td>boolean</td>
+        <td>
+          `bgpEnrichment` enables BGP ASN enrichment by watching FRRConfiguration CRDs (frrk8s.metallb.io/v1beta1).
+When enabled, flows are enriched with `SrcASN` and `DstASN` fields based on longest-prefix match against
+advertised prefixes from FRRConfiguration resources. Requires frr-k8s to be installed in the cluster.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>clusterName</b></td>
         <td>string</td>
         <td>
-          `clusterName` is the name of the cluster to appear in the flows data. This is useful in a multi-cluster context. When using OpenShift, leave empty to make it automatically determined.<br/>
+          `clusterName` is the name of the cluster to appear in the flows data. In a multi-cluster context, it makes it possible to identify the flows provenance.<br/>
           <br/>
             <i>Default</i>: <br/>
         </td>
@@ -8557,12 +8593,25 @@ but with a lesser improvement in performance.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b><a href="#flowcollectorspecprocessorinformercacheproxy">informerCacheProxy</a></b></td>
+        <td>object</td>
+        <td>
+          `informerCacheProxy` configuration for centralized Kubernetes informers that push cache updates to flowlogs-pipeline processors.
+This reduces load on the Kubernetes API server by having a single component query the API instead of N FLP processors.
+When enabled, a dedicated deployment is created that watches Kubernetes resources and pushes updates via gRPC.
+Benefits: Reduced API server load on large clusters with many FLP replicas.
+Drawbacks: More complex deployment (additional component), higher resource usage on small clusters.
+Recommended only for clusters with many FLP replicas (>3) or when API server load is a concern.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#flowcollectorspecprocessorkafkaconsumerautoscaler">kafkaConsumerAutoscaler</a></b></td>
         <td>object</td>
         <td>
-          `kafkaConsumerAutoscaler` [deprecated (*)] is the spec of a horizontal pod autoscaler to set up for `flowlogs-pipeline-transformer`, which consumes Kafka messages.
+          `kafkaConsumerAutoscaler` is the spec of a horizontal pod autoscaler to set up for `flowlogs-pipeline-transformer`, which consumes Kafka messages.
 This setting is ignored when Kafka is disabled.
-Deprecation notice: managed autoscaler will be removed in a future version. You may configure instead an autoscaler of your choice, and set `spec.processor.unmanagedReplicas` to `true`.<br/>
+
+Deprecated: managed autoscaler will be removed in a future version. You may configure instead an autoscaler of your choice, and set `spec.processor.unmanagedReplicas` to `true`.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -8587,9 +8636,10 @@ Deprecation notice: managed autoscaler will be removed in a future version. You 
         <td><b>kafkaConsumerReplicas</b></td>
         <td>integer</td>
         <td>
-          `kafkaConsumerReplicas` [deprecated (*)] defines the number of replicas (pods) to start for `flowlogs-pipeline-transformer`, which consumes Kafka messages.
+          `kafkaConsumerReplicas` defines the number of replicas (pods) to start for `flowlogs-pipeline-transformer`, which consumes Kafka messages.
 This setting is ignored when Kafka is disabled.
-Deprecation notice: use `spec.processor.consumerReplicas` instead.<br/>
+
+Deprecated: use `spec.processor.consumerReplicas` instead.<br/>
           <br/>
             <i>Format</i>: int32<br/>
             <i>Default</i>: 3<br/>
@@ -8664,7 +8714,7 @@ For more information, see https://kubernetes.io/docs/concepts/configuration/mana
         <td><b><a href="#flowcollectorspecprocessorsubnetlabels">subnetLabels</a></b></td>
         <td>object</td>
         <td>
-          `subnetLabels` allows to define custom labels on subnets and IPs or to enable automatic labeling of recognized subnets in OpenShift, which is used to identify cluster external traffic.
+          `subnetLabels` allows to define custom labels on subnets and IPs and, for supported vendors, to enable automatic labeling of recognized subnets, which is used to identify cluster external traffic.
 When a subnet matches the source or destination IP of a flow, a corresponding field is added: `SrcSubnetLabel` or `DstSubnetLabel`.<br/>
         </td>
         <td>false</td>
@@ -8711,7 +8761,7 @@ This delay is ignored when a FIN packet is collected for TCP flows (see `convers
         <td><b>conversationHeartbeatInterval</b></td>
         <td>string</td>
         <td>
-          `conversationHeartbeatInterval` is the time to wait between "tick" events of a conversation<br/>
+          `conversationHeartbeatInterval` is the time to wait between "tick" events of a conversation.<br/>
           <br/>
             <i>Default</i>: 30s<br/>
         </td>
@@ -8729,7 +8779,9 @@ This delay is ignored when a FIN packet is collected for TCP flows (see `convers
         <td><b>dropUnusedFields</b></td>
         <td>boolean</td>
         <td>
-          `dropUnusedFields` [deprecated (*)] this setting is not used anymore.<br/>
+          `dropUnusedFields`.
+
+Deprecated: this setting is not used anymore.<br/>
           <br/>
             <i>Default</i>: true<br/>
         </td>
@@ -8738,7 +8790,7 @@ This delay is ignored when a FIN packet is collected for TCP flows (see `convers
         <td><b>enableKubeProbes</b></td>
         <td>boolean</td>
         <td>
-          `enableKubeProbes` is a flag to enable or disable Kubernetes liveness and readiness probes<br/>
+          `enableKubeProbes` is a flag to enable or disable Kubernetes liveness and readiness probes.<br/>
           <br/>
             <i>Default</i>: true<br/>
         </td>
@@ -8757,7 +8809,7 @@ in edge debug or support scenarios.<br/>
         <td><b>healthPort</b></td>
         <td>integer</td>
         <td>
-          `healthPort` is a collector HTTP port in the Pod that exposes the health check API<br/>
+          `healthPort` is a collector HTTP port in the Pod that exposes the health check API.<br/>
           <br/>
             <i>Format</i>: int32<br/>
             <i>Default</i>: 8080<br/>
@@ -8783,7 +8835,9 @@ By convention, some values are forbidden. It must be greater than 1024 and diffe
         <td><b>profilePort</b></td>
         <td>integer</td>
         <td>
-          `profilePort` allows setting up a Go pprof profiler listening to this port<br/>
+          `profilePort` allows setting up a Go pprof profiler listening to this port.
+This is for debugging purpose only. This port should not be exposed, you can
+access it through local port-forwarding.<br/>
           <br/>
             <i>Format</i>: int32<br/>
             <i>Minimum</i>: 0<br/>
@@ -8794,7 +8848,7 @@ By convention, some values are forbidden. It must be greater than 1024 and diffe
         <td><b><a href="#flowcollectorspecprocessoradvancedscheduling">scheduling</a></b></td>
         <td>object</td>
         <td>
-          scheduling controls how the pods are scheduled on nodes.<br/>
+          `scheduling` controls how the pods are scheduled on nodes.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -8816,7 +8870,7 @@ If not provided and `spec.agent.ebpf.privileged` is `true`, secondary networks a
 
 
 
-scheduling controls how the pods are scheduled on nodes.
+`scheduling` controls how the pods are scheduled on nodes.
 
 <table>
     <thead>
@@ -10679,14 +10733,508 @@ Fields absent from the 'k8s.v1.cni.cncf.io/network-status' annotation must not b
 </table>
 
 
+### FlowCollector.spec.processor.informerCacheProxy
+<sup><sup>[↩ Parent](#flowcollectorspecprocessor)</sup></sup>
+
+
+
+`informerCacheProxy` configuration for centralized Kubernetes informers that push cache updates to flowlogs-pipeline processors.
+This reduces load on the Kubernetes API server by having a single component query the API instead of N FLP processors.
+When enabled, a dedicated deployment is created that watches Kubernetes resources and pushes updates via gRPC.
+Benefits: Reduced API server load on large clusters with many FLP replicas.
+Drawbacks: More complex deployment (additional component), higher resource usage on small clusters.
+Recommended only for clusters with many FLP replicas (>3) or when API server load is a concern.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#flowcollectorspecprocessorinformercacheproxyadvanced">advanced</a></b></td>
+        <td>object</td>
+        <td>
+          `advanced` allows setting some technical parameters of the informer cache proxy component.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>enabled</b></td>
+        <td>boolean</td>
+        <td>
+          `enabled` controls whether to deploy the informer cache proxy.
+When `true`, a dedicated deployment watches K8s resources and pushes cache updates via gRPC to FLP processors, reducing API server load.
+When `false` (default), each FLP processor uses local informers.
+Enable only on large clusters or when API server load is a concern, as it adds deployment complexity.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>replicas</b></td>
+        <td>integer</td>
+        <td>
+          `replicas` defines the number of replicas for the flowlogs-pipeline-informers deployment.
+For high availability, a minimum of 2 replicas is required when `enabled` is `true`.<br/>
+          <br/>
+            <i>Format</i>: int32<br/>
+            <i>Default</i>: 2<br/>
+            <i>Minimum</i>: 2<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#flowcollectorspecprocessorinformercacheproxyresources">resources</a></b></td>
+        <td>object</td>
+        <td>
+          `resources` are the compute resources required by the informer cache proxy container.
+For more information, see https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/<br/>
+          <br/>
+            <i>Default</i>: map[limits:map[cpu:200m memory:256Mi] requests:map[cpu:50m memory:128Mi]]<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#flowcollectorspecprocessorinformercacheproxytls">tls</a></b></td>
+        <td>object</td>
+        <td>
+          `tls` defines the TLS configuration for the gRPC communication between the informer cache proxy and processors.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### FlowCollector.spec.processor.informerCacheProxy.advanced
+<sup><sup>[↩ Parent](#flowcollectorspecprocessorinformercacheproxy)</sup></sup>
+
+
+
+`advanced` allows setting some technical parameters of the informer cache proxy component.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>batchSize</b></td>
+        <td>integer</td>
+        <td>
+          `batchSize` defines the maximum number of cache entries to send in a single update batch.<br/>
+          <br/>
+            <i>Default</i>: 100<br/>
+            <i>Minimum</i>: 1<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>processorPort</b></td>
+        <td>integer</td>
+        <td>
+          `processorPort` defines the gRPC port where flowlogs-pipeline processors listen for k8s cache updates.<br/>
+          <br/>
+            <i>Format</i>: int32<br/>
+            <i>Default</i>: 9402<br/>
+            <i>Minimum</i>: 1<br/>
+            <i>Maximum</i>: 65535<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>resyncInterval</b></td>
+        <td>integer</td>
+        <td>
+          `resyncInterval` defines the interval in seconds to rediscover processors and sync state.<br/>
+          <br/>
+            <i>Default</i>: 60<br/>
+            <i>Minimum</i>: 1<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>sendTimeout</b></td>
+        <td>integer</td>
+        <td>
+          `sendTimeout` defines the timeout in seconds for sending updates to processors.<br/>
+          <br/>
+            <i>Default</i>: 10<br/>
+            <i>Minimum</i>: 1<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>updateBufferSize</b></td>
+        <td>integer</td>
+        <td>
+          `updateBufferSize` defines the size of the internal update channel buffer.<br/>
+          <br/>
+            <i>Default</i>: 100<br/>
+            <i>Minimum</i>: 1<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### FlowCollector.spec.processor.informerCacheProxy.resources
+<sup><sup>[↩ Parent](#flowcollectorspecprocessorinformercacheproxy)</sup></sup>
+
+
+
+`resources` are the compute resources required by the informer cache proxy container.
+For more information, see https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#flowcollectorspecprocessorinformercacheproxyresourcesclaimsindex">claims</a></b></td>
+        <td>[]object</td>
+        <td>
+          Claims lists the names of resources, defined in spec.resourceClaims,
+that are used by this container.
+
+This field depends on the
+DynamicResourceAllocation feature gate.
+
+This field is immutable. It can only be set for containers.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>limits</b></td>
+        <td>map[string]int or string</td>
+        <td>
+          Limits describes the maximum amount of compute resources allowed.
+More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>requests</b></td>
+        <td>map[string]int or string</td>
+        <td>
+          Requests describes the minimum amount of compute resources required.
+If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+otherwise to an implementation-defined value. Requests cannot exceed Limits.
+More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### FlowCollector.spec.processor.informerCacheProxy.resources.claims[index]
+<sup><sup>[↩ Parent](#flowcollectorspecprocessorinformercacheproxyresources)</sup></sup>
+
+
+
+ResourceClaim references one entry in PodSpec.ResourceClaims.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name must match the name of one entry in pod.spec.resourceClaims of
+the Pod where this field is used. It makes that resource available
+inside a container.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>request</b></td>
+        <td>string</td>
+        <td>
+          Request is the name chosen for a request in the referenced claim.
+If empty, everything from the claim is made available, otherwise
+only the result of this request.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### FlowCollector.spec.processor.informerCacheProxy.tls
+<sup><sup>[↩ Parent](#flowcollectorspecprocessorinformercacheproxy)</sup></sup>
+
+
+
+`tls` defines the TLS configuration for the gRPC communication between the informer cache proxy and processors.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>type</b></td>
+        <td>enum</td>
+        <td>
+          Select the type of TLS configuration:<br>
+- `Disabled` to not configure TLS for the k8scache endpoint. Disabling TLS results in a less secure deployment model.<br>
+- `Provided` to manually provide cert/key references for mTLS.<br>
+- `Auto` (default) to use a default certificate, which may vary depending on the Kubernetes vendor.<br>
+- `Auto-mTLS` to preconfigure mTLS with cert-manager.<br>
+See also: https://github.com/netobserv/netobserv-operator/blob/main/docs/TLS.md.<br/>
+          <br/>
+            <i>Enum</i>: Disabled, Provided, Auto, Auto-mTLS<br/>
+            <i>Default</i>: Auto<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#flowcollectorspecprocessorinformercacheproxytlsprovidedcertificates">providedCertificates</a></b></td>
+        <td>object</td>
+        <td>
+          mTLS configuration when `type` is set to `Provided`.
+`serverCert` is required. `clientCert` is optional; if provided, mTLS is enabled.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### FlowCollector.spec.processor.informerCacheProxy.tls.providedCertificates
+<sup><sup>[↩ Parent](#flowcollectorspecprocessorinformercacheproxytls)</sup></sup>
+
+
+
+mTLS configuration when `type` is set to `Provided`.
+`serverCert` is required. `clientCert` is optional; if provided, mTLS is enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#flowcollectorspecprocessorinformercacheproxytlsprovidedcertificatescafile">caFile</a></b></td>
+        <td>object</td>
+        <td>
+          Reference to the CA file.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#flowcollectorspecprocessorinformercacheproxytlsprovidedcertificatesclientcert">clientCert</a></b></td>
+        <td>object</td>
+        <td>
+          TLS client certificate reference, used for mTLS. Leave unset for simple TLS.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#flowcollectorspecprocessorinformercacheproxytlsprovidedcertificatesservercert">serverCert</a></b></td>
+        <td>object</td>
+        <td>
+          TLS server certificate reference.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### FlowCollector.spec.processor.informerCacheProxy.tls.providedCertificates.caFile
+<sup><sup>[↩ Parent](#flowcollectorspecprocessorinformercacheproxytlsprovidedcertificates)</sup></sup>
+
+
+
+Reference to the CA file.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>file</b></td>
+        <td>string</td>
+        <td>
+          File name within the config map or secret.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name of the config map or secret containing the file.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>namespace</b></td>
+        <td>string</td>
+        <td>
+          Namespace of the config map or secret containing the file. If omitted, the default is to use the same namespace as where NetObserv is deployed.
+If the namespace is different, the config map or the secret is copied so that it can be mounted as required.<br/>
+          <br/>
+            <i>Default</i>: <br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>type</b></td>
+        <td>enum</td>
+        <td>
+          Type for the file reference: `configmap` or `secret`.<br/>
+          <br/>
+            <i>Enum</i>: configmap, secret<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### FlowCollector.spec.processor.informerCacheProxy.tls.providedCertificates.clientCert
+<sup><sup>[↩ Parent](#flowcollectorspecprocessorinformercacheproxytlsprovidedcertificates)</sup></sup>
+
+
+
+TLS client certificate reference, used for mTLS. Leave unset for simple TLS.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>certFile</b></td>
+        <td>string</td>
+        <td>
+          `certFile` defines the path to the certificate file name within the config map or secret.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>certKey</b></td>
+        <td>string</td>
+        <td>
+          `certKey` defines the path to the certificate private key file name within the config map or secret. Omit when the key is not necessary.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name of the config map or secret containing certificates.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>namespace</b></td>
+        <td>string</td>
+        <td>
+          Namespace of the config map or secret containing certificates. If omitted, the default is to use the same namespace as where NetObserv is deployed.
+If the namespace is different, the config map or the secret is copied so that it can be mounted as required.<br/>
+          <br/>
+            <i>Default</i>: <br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>type</b></td>
+        <td>enum</td>
+        <td>
+          Type for the certificate reference: `configmap` or `secret`.<br/>
+          <br/>
+            <i>Enum</i>: configmap, secret<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### FlowCollector.spec.processor.informerCacheProxy.tls.providedCertificates.serverCert
+<sup><sup>[↩ Parent](#flowcollectorspecprocessorinformercacheproxytlsprovidedcertificates)</sup></sup>
+
+
+
+TLS server certificate reference.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>certFile</b></td>
+        <td>string</td>
+        <td>
+          `certFile` defines the path to the certificate file name within the config map or secret.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>certKey</b></td>
+        <td>string</td>
+        <td>
+          `certKey` defines the path to the certificate private key file name within the config map or secret. Omit when the key is not necessary.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name of the config map or secret containing certificates.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>namespace</b></td>
+        <td>string</td>
+        <td>
+          Namespace of the config map or secret containing certificates. If omitted, the default is to use the same namespace as where NetObserv is deployed.
+If the namespace is different, the config map or the secret is copied so that it can be mounted as required.<br/>
+          <br/>
+            <i>Default</i>: <br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>type</b></td>
+        <td>enum</td>
+        <td>
+          Type for the certificate reference: `configmap` or `secret`.<br/>
+          <br/>
+            <i>Enum</i>: configmap, secret<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
 ### FlowCollector.spec.processor.kafkaConsumerAutoscaler
 <sup><sup>[↩ Parent](#flowcollectorspecprocessor)</sup></sup>
 
 
 
-`kafkaConsumerAutoscaler` [deprecated (*)] is the spec of a horizontal pod autoscaler to set up for `flowlogs-pipeline-transformer`, which consumes Kafka messages.
+`kafkaConsumerAutoscaler` is the spec of a horizontal pod autoscaler to set up for `flowlogs-pipeline-transformer`, which consumes Kafka messages.
 This setting is ignored when Kafka is disabled.
-Deprecation notice: managed autoscaler will be removed in a future version. You may configure instead an autoscaler of your choice, and set `spec.processor.unmanagedReplicas` to `true`.
+
+Deprecated: managed autoscaler will be removed in a future version. You may configure instead an autoscaler of your choice, and set `spec.processor.unmanagedReplicas` to `true`.
 
 <table>
     <thead>
@@ -11635,7 +12183,7 @@ The names correspond to the names in Prometheus without the prefix. For example,
 Note that the more metrics you add, the bigger is the impact on Prometheus workload resources.
 More information, with full list of available metrics: https://github.com/netobserv/netobserv-operator/blob/main/docs/Metrics.md<br/>
           <br/>
-            <i>Enum</i>: namespace_egress_bytes_total, namespace_egress_packets_total, namespace_ingress_bytes_total, namespace_ingress_packets_total, namespace_flows_total, node_egress_bytes_total, node_egress_packets_total, node_ingress_bytes_total, node_ingress_packets_total, node_flows_total, workload_egress_bytes_total, workload_egress_packets_total, workload_ingress_bytes_total, workload_ingress_packets_total, workload_flows_total, namespace_drop_bytes_total, namespace_drop_packets_total, node_drop_bytes_total, node_drop_packets_total, workload_drop_bytes_total, workload_drop_packets_total, namespace_rtt_seconds, node_rtt_seconds, workload_rtt_seconds, namespace_dns_latency_seconds, node_dns_latency_seconds, workload_dns_latency_seconds, node_network_policy_events_total, namespace_network_policy_events_total, workload_network_policy_events_total, node_ipsec_flows_total, namespace_ipsec_flows_total, workload_ipsec_flows_total, node_tls_flows_total, namespace_tls_flows_total, workload_tls_flows_total, node_to_node_ingress_flows_total<br/>
+            <i>Enum</i>: namespace_egress_bytes_total, namespace_egress_packets_total, namespace_ingress_bytes_total, namespace_ingress_packets_total, namespace_flows_total, node_egress_bytes_total, node_egress_packets_total, node_ingress_bytes_total, node_ingress_packets_total, node_flows_total, workload_egress_bytes_total, workload_egress_packets_total, workload_ingress_bytes_total, workload_ingress_packets_total, workload_flows_total, namespace_drop_bytes_total, namespace_drop_packets_total, node_drop_bytes_total, node_drop_packets_total, workload_drop_bytes_total, workload_drop_packets_total, namespace_rtt_seconds, node_rtt_seconds, workload_rtt_seconds, namespace_dns_latency_seconds, node_dns_latency_seconds, workload_dns_latency_seconds, namespace_dns_flows_total, node_dns_flows_total, workload_dns_flows_total, node_network_policy_events_total, namespace_network_policy_events_total, workload_network_policy_events_total, node_ipsec_flows_total, namespace_ipsec_flows_total, workload_ipsec_flows_total, node_tls_flows_total, namespace_tls_flows_total, workload_tls_flows_total, node_to_node_ingress_flows_total<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -11644,7 +12192,7 @@ More information, with full list of available metrics: https://github.com/netobs
         <td>
           `disableAlerts` is a list of alert groups that should be disabled from the default set of alerts.
 Possible values are: `NetObservNoFlows`, `NetObservLokiError`, `PacketDropsByKernel`, `PacketDropsByDevice`, `IPsecErrors`, `NetpolDenied`,
-`LatencyHighTrend`, `DNSErrors`, `DNSNxDomain`, `ExternalEgressHighTrend`, `ExternalIngressHighTrend`, `Ingress5xxErrors`, `IngressHTTPLatencyTrend`.
+`LatencyHighTrend`, `DNSErrors`, `DNSNxDomain`, `ExternalEgressHighTrend`, `ExternalIngressHighTrend`, `Ingress5xxErrors`, `IngressHTTPLatencyTrend`, `TLSInsecureVersion`.
 More information on alerts: https://github.com/netobserv/netobserv-operator/blob/main/docs/HealthRules.md<br/>
         </td>
         <td>false</td>
@@ -11668,11 +12216,11 @@ Note that the more metrics you add, the bigger is the impact on Prometheus workl
 Metrics enabled by default are:
 `namespace_flows_total`, `node_ingress_bytes_total`, `node_egress_bytes_total`, `workload_ingress_bytes_total`,
 `workload_egress_bytes_total`, `namespace_drop_packets_total` (when `PacketDrop` feature is enabled),
-`namespace_rtt_seconds` (when `FlowRTT` feature is enabled), `namespace_dns_latency_seconds` (when `DNSTracking` feature is enabled),
+`namespace_rtt_seconds` (when `FlowRTT` feature is enabled), `namespace_dns_latency_seconds` and `namespace_dns_flows_total` (when `DNSTracking` feature is enabled),
 `namespace_network_policy_events_total` (when `NetworkEvents` feature is enabled).
 More information, with full list of available metrics: https://github.com/netobserv/netobserv-operator/blob/main/docs/Metrics.md<br/>
           <br/>
-            <i>Enum</i>: namespace_egress_bytes_total, namespace_egress_packets_total, namespace_ingress_bytes_total, namespace_ingress_packets_total, namespace_flows_total, node_egress_bytes_total, node_egress_packets_total, node_ingress_bytes_total, node_ingress_packets_total, node_flows_total, workload_egress_bytes_total, workload_egress_packets_total, workload_ingress_bytes_total, workload_ingress_packets_total, workload_flows_total, namespace_drop_bytes_total, namespace_drop_packets_total, node_drop_bytes_total, node_drop_packets_total, workload_drop_bytes_total, workload_drop_packets_total, namespace_rtt_seconds, node_rtt_seconds, workload_rtt_seconds, namespace_dns_latency_seconds, node_dns_latency_seconds, workload_dns_latency_seconds, node_network_policy_events_total, namespace_network_policy_events_total, workload_network_policy_events_total, node_ipsec_flows_total, namespace_ipsec_flows_total, workload_ipsec_flows_total, node_tls_flows_total, namespace_tls_flows_total, workload_tls_flows_total, node_to_node_ingress_flows_total<br/>
+            <i>Enum</i>: namespace_egress_bytes_total, namespace_egress_packets_total, namespace_ingress_bytes_total, namespace_ingress_packets_total, namespace_flows_total, node_egress_bytes_total, node_egress_packets_total, node_ingress_bytes_total, node_ingress_packets_total, node_flows_total, workload_egress_bytes_total, workload_egress_packets_total, workload_ingress_bytes_total, workload_ingress_packets_total, workload_flows_total, namespace_drop_bytes_total, namespace_drop_packets_total, node_drop_bytes_total, node_drop_packets_total, workload_drop_bytes_total, workload_drop_packets_total, namespace_rtt_seconds, node_rtt_seconds, workload_rtt_seconds, namespace_dns_latency_seconds, node_dns_latency_seconds, workload_dns_latency_seconds, namespace_dns_flows_total, node_dns_flows_total, workload_dns_flows_total, node_network_policy_events_total, namespace_network_policy_events_total, workload_network_policy_events_total, node_ipsec_flows_total, namespace_ipsec_flows_total, workload_ipsec_flows_total, node_tls_flows_total, namespace_tls_flows_total, workload_tls_flows_total, node_to_node_ingress_flows_total<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -11708,11 +12256,11 @@ More information, with full list of available metrics: https://github.com/netobs
         <td>
           Health rule template name.
 Possible values are: `PacketDropsByKernel`, `PacketDropsByDevice`, `IPsecErrors`, `NetpolDenied`,
-`LatencyHighTrend`, `DNSErrors`, `DNSNxDomain`, `ExternalEgressHighTrend`, `ExternalIngressHighTrend`, `Ingress5xxErrors`, `IngressHTTPLatencyTrend`.
+`LatencyHighTrend`, `DNSErrors`, `DNSNxDomain`, `ExternalEgressHighTrend`, `ExternalIngressHighTrend`, `Ingress5xxErrors`, `IngressHTTPLatencyTrend`, `TLSInsecureVersion`.
 Note: `NetObservNoFlows` and `NetObservLokiError` are alert-only and cannot be used as health rules.
 More information on health rules: https://github.com/netobserv/netobserv-operator/blob/main/docs/HealthRules.md<br/>
           <br/>
-            <i>Enum</i>: PacketDropsByKernel, PacketDropsByDevice, IPsecErrors, NetpolDenied, LatencyHighTrend, DNSErrors, DNSNxDomain, ExternalEgressHighTrend, ExternalIngressHighTrend, Ingress5xxErrors, IngressHTTPLatencyTrend<br/>
+            <i>Enum</i>: PacketDropsByKernel, PacketDropsByDevice, IPsecErrors, NetpolDenied, LatencyHighTrend, DNSErrors, DNSNxDomain, ExternalEgressHighTrend, ExternalIngressHighTrend, Ingress5xxErrors, IngressHTTPLatencyTrend, TLSInsecureVersion<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -11883,6 +12431,15 @@ Metrics server endpoint configuration for Prometheus scraper
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>scrapeInterval</b></td>
+        <td>string</td>
+        <td>
+          Prometheus scraping interval, how often metrics are pulled.<br/>
+          <br/>
+            <i>Format</i>: duration<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#flowcollectorspecprocessormetricsservertls">tls</a></b></td>
         <td>object</td>
         <td>
@@ -11915,8 +12472,9 @@ TLS configuration.
         <td>
           Select the type of TLS configuration:<br>
 - `Disabled` (default) to not configure TLS for the endpoint.
-- `Provided` to manually provide cert file and a key file. [Unsupported (*)].
-- `Auto` to use OpenShift auto generated certificate using annotations.<br/>
+- `Provided` to manually provide cert file and a key file.
+- `Auto` to use a default certificate, which may vary depending on the Kubernetes vendor.
+Refer to https://github.com/netobserv/netobserv-operator/blob/main/docs/TLS.md for more information.<br/>
           <br/>
             <i>Enum</i>: Disabled, Provided, Auto<br/>
             <i>Default</i>: Disabled<br/>
@@ -11927,7 +12485,7 @@ TLS configuration.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the provided certificate.
-If set to `true`, the `providedCaFile` field is ignored.<br/>
+If set to `true`, the `providedCaFile` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -12177,7 +12735,7 @@ Service configuration, only used when `spec.deploymentModel` is `Service`.
 - `Disabled` to not configure TLS for the endpoint. Disabling TLS results in a less secure deployment model.<br>
 - `Provided` to manually provide the key and certificate references.<br>
 - `Auto` (default) to enable automatically based on the running environment.<br>
-- `Auto-mTLS` to preconfigure mTLS. [Unsupported (*)].<br>
+- `Auto-mTLS` to preconfigure mTLS.<br>
 See also: https://github.com/netobserv/netobserv-operator/blob/main/docs/TLS.md.<br/>
           <br/>
             <i>Enum</i>: Disabled, Provided, Auto, Auto-mTLS<br/>
@@ -12464,7 +13022,7 @@ This setting is ignored if `collectionMode` is different from `AllowList`.<br/>
 
 
 
-`subnetLabels` allows to define custom labels on subnets and IPs or to enable automatic labeling of recognized subnets in OpenShift, which is used to identify cluster external traffic.
+`subnetLabels` allows to define custom labels on subnets and IPs and, for supported vendors, to enable automatic labeling of recognized subnets, which is used to identify cluster external traffic.
 When a subnet matches the source or destination IP of a flow, a corresponding field is added: `SrcSubnetLabel` or `DstSubnetLabel`.
 
 <table>
@@ -12477,22 +13035,33 @@ When a subnet matches the source or destination IP of a flow, a corresponding fi
         </tr>
     </thead>
     <tbody><tr>
+        <td><b>autoDetect</b></td>
+        <td>boolean</td>
+        <td>
+          `autoDetect` allows, when set to `true`, to detect automatically the machines, pods and services subnets based on
+vendor-specific configuration. It requires a vendor-specific implementation. Indirectly, this is a way to accurately detect
+external traffic: flows that are not labeled for those subnets are external to the cluster. Enabled by default.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#flowcollectorspecprocessorsubnetlabelscustomlabelsindex">customLabels</a></b></td>
         <td>[]object</td>
         <td>
           `customLabels` allows you to customize subnets and IPs labeling, such as to identify cluster external workloads or web services.
 External subnets must be labeled with the prefix `EXT:`, or not labeled at all, in order to work with default quick filters and some metrics examples provided.<br/>
-If `openShiftAutoDetect` is disabled or you are not using OpenShift, it is recommended to manually configure labels for the cluster subnets, to distinguish internal traffic from external traffic.<br/>
-If `openShiftAutoDetect` is enabled, `customLabels` overrides the detected subnets when they overlap.<br/><br/>
+If `autoDetect` is disabled or your Kubernetes vendor has no auto-detection implemented, it is recommended to manually configure labels for the cluster subnets, to distinguish internal traffic from external traffic.<br/>
+If `autoDetect` is enabled, `customLabels` overrides the detected subnets when they overlap.<br/><br/>
         </td>
         <td>false</td>
       </tr><tr>
         <td><b>openShiftAutoDetect</b></td>
         <td>boolean</td>
         <td>
-          `openShiftAutoDetect` allows, when set to `true`, to detect automatically the machines, pods and services subnets based on the
-OpenShift install configuration and the Cluster Network Operator configuration. Indirectly, this is a way to accurately detect
-external traffic: flows that are not labeled for those subnets are external to the cluster. Enabled by default on OpenShift.<br/>
+          `openShiftAutoDetect` allows, when set to `true`, to detect automatically the machines, pods and services subnets based on
+vendor-specific configuration. Indirectly, this is a way to accurately detect
+external traffic: flows that are not labeled for those subnets are external to the cluster.
+
+Deprecated: use `autoDetect` instead.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -12582,7 +13151,7 @@ Prometheus querying configuration, such as client settings, used in the Console 
         <td>enum</td>
         <td>
           `mode` must be set according to the type of Prometheus installation that stores NetObserv metrics:<br>
-- Use `Auto` to try configuring automatically. In OpenShift, it uses the Thanos querier from OpenShift Cluster Monitoring.<br>
+- Use `Auto` to try configuring automatically for known vendors.<br>
 - Use `Manual` for a manual setup.<br><br/>
           <br/>
             <i>Enum</i>: Manual, Auto<br/>
@@ -12645,9 +13214,7 @@ Prometheus configuration for `Manual` mode.
         <td><b><a href="#flowcollectorspecprometheusqueriermanualalertmanager">alertManager</a></b></td>
         <td>object</td>
         <td>
-          AlertManager configuration. This is used in the console to query silenced alerts, for displaying health information.
-When used in OpenShift it can be left empty to use the Console API instead.
-[Unsupported (*)].<br/>
+          AlertManager configuration. This is used in the console to query silenced alerts, for displaying health information.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -12683,8 +13250,6 @@ When used in OpenShift it can be left empty to use the Console API instead.
 
 
 AlertManager configuration. This is used in the console to query silenced alerts, for displaying health information.
-When used in OpenShift it can be left empty to use the Console API instead.
-[Unsupported (*)].
 
 <table>
     <thead>
@@ -12750,7 +13315,7 @@ TLS client configuration for Prometheus AlertManager URL.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the server certificate.
-If set to `true`, the `caCert` field is ignored.<br/>
+If set to `true`, the `caCert` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>
@@ -12923,7 +13488,7 @@ TLS client configuration for Prometheus URL.
         <td>boolean</td>
         <td>
           `insecureSkipVerify` allows skipping client-side verification of the server certificate.
-If set to `true`, the `caCert` field is ignored.<br/>
+If set to `true`, the `caCert` field is ignored. For security, this should not be used other than for testing or demo.<br/>
           <br/>
             <i>Default</i>: false<br/>
         </td>

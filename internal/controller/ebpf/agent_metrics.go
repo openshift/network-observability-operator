@@ -2,6 +2,7 @@ package ebpf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
@@ -21,14 +22,21 @@ func (c *AgentController) reconcileMetricsService(ctx context.Context, target *f
 	defer report.LogIfNeeded(ctx)
 
 	if !target.IsEBPFMetricsEnabled() {
-		c.Managed.TryDelete(ctx, c.promSvc)
+		var errs []error
+		if err := c.Managed.TryDelete(ctx, c.promSvc); err != nil {
+			errs = append(errs, err)
+		}
 		if c.ClusterInfo.HasSvcMonitor() {
-			c.Managed.TryDelete(ctx, c.serviceMonitor)
+			if err := c.Managed.TryDelete(ctx, c.serviceMonitor); err != nil {
+				errs = append(errs, err)
+			}
 		}
 		if c.ClusterInfo.HasPromRule() {
-			c.Managed.TryDelete(ctx, c.prometheusRule)
+			if err := c.Managed.TryDelete(ctx, c.prometheusRule); err != nil {
+				errs = append(errs, err)
+			}
 		}
-		return nil
+		return errors.Join(errs...)
 	}
 
 	if err := c.ReconcileService(ctx, c.promSvc, c.promService(target), &report); err != nil {
@@ -84,10 +92,14 @@ func (c *AgentController) promService(target *flowslatest.FlowCollectorEBPF) *co
 
 func (c *AgentController) promServiceMonitoring(target *flowslatest.FlowCollectorEBPF, useEndpointSlices bool) *monitoringv1.ServiceMonitor {
 	serverName := fmt.Sprintf("%s.%s.svc", constants.EBPFAgentMetricsSvcName, c.PrivilegedNamespace())
-	scheme, smTLS := helper.GetServiceMonitorTLSConfig(&target.Metrics.Server.TLS, serverName, c.IsDownstream)
+	scheme, smTLS := helper.GetServiceMonitorTLSConfig(&target.Metrics.Server.TLS, serverName)
 	var sdRole *monitoringv1.ServiceDiscoveryRole
 	if useEndpointSlices {
 		sdRole = ptr.To(monitoringv1.EndpointSliceRole)
+	}
+	interval := "30s"
+	if target.Metrics.Server.ScrapeInterval != nil {
+		interval = target.Metrics.Server.ScrapeInterval.String()
 	}
 	return &monitoringv1.ServiceMonitor{
 		ObjectMeta: metav1.ObjectMeta{
@@ -103,7 +115,7 @@ func (c *AgentController) promServiceMonitoring(target *flowslatest.FlowCollecto
 			Endpoints: []monitoringv1.Endpoint{
 				{
 					Port:      "metrics",
-					Interval:  "30s",
+					Interval:  monitoringv1.Duration(interval),
 					Scheme:    &scheme,
 					TLSConfig: smTLS,
 				},

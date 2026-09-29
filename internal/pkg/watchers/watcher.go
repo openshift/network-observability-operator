@@ -8,16 +8,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
-	"github.com/netobserv/netobserv-operator/internal/pkg/narrowcache"
+	"github.com/netobserv/netobserv-operator/internal/pkg/manager/enqueuer"
 )
 
 var (
@@ -26,19 +23,19 @@ var (
 )
 
 type Watcher struct {
-	ctrl             controller.Controller
-	watches          map[string]bool
-	wmut             sync.RWMutex
-	defaultNamespace string
+	ctrlQ             enqueuer.Dynamic
+	wmut              sync.RWMutex
+	defaultNamespace  string
+	operatorNamespace string
 }
 
-func NewWatcher(ctrl controller.Controller) *Watcher {
+func NewWatcher(ctrlQ enqueuer.Dynamic, opNamespace string) *Watcher {
 	// Note that Watcher doesn't start any informer at this point, in order to keep informers watching strictly
 	// the desired object rather than the whole cluster.
 	// Since watched objects can be in any namespace, we cannot use namespace-based restriction to limit memory consumption.
 	return &Watcher{
-		ctrl:    ctrl,
-		watches: make(map[string]bool),
+		ctrlQ:             ctrlQ,
+		operatorNamespace: opNamespace,
 	}
 }
 
@@ -50,62 +47,16 @@ func kindToWatchable(kind flowslatest.MountableType) Watchable {
 }
 
 func (w *Watcher) Reset(namespace string) {
+	w.ctrlQ.ResetActiveWatches()
+	w.wmut.Lock()
+	defer w.wmut.Unlock()
 	w.defaultNamespace = namespace
-	// Reset all registered watches as inactive
-	w.wmut.Lock()
-	for k := range w.watches {
-		w.watches[k] = false
-	}
-	w.wmut.Unlock()
 }
 
-func key(kind flowslatest.MountableType, name, namespace string) string {
-	return string(kind) + "/" + namespace + "/" + name
-}
-
-func (w *Watcher) setActiveWatch(key string) bool {
-	w.wmut.Lock()
-	_, exists := w.watches[key]
-	w.watches[key] = true
-	w.wmut.Unlock()
-	return exists
-}
-
-func (w *Watcher) watch(ctx context.Context, cl *narrowcache.Client, kind flowslatest.MountableType, obj client.Object) error {
-	k := key(kind, obj.GetName(), obj.GetNamespace())
-	// Mark as active
-	exists := w.setActiveWatch(k)
-	if exists {
-		// Don't register again
-		return nil
-	}
-	s, err := cl.GetSource(
-		ctx,
-		obj,
-		handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
-			// The watch might be registered, but inactive
-			k := key(kind, o.GetName(), o.GetNamespace())
-			w.wmut.RLock()
-			active := w.watches[k]
-			w.wmut.RUnlock()
-			if active {
-				// Trigger FlowCollector reconcile
-				return []reconcile.Request{{NamespacedName: constants.FlowCollectorName}}
-			}
-			return []reconcile.Request{}
-		}),
-	)
-	if err != nil {
-		return err
-	}
-	// Note that currently, watches are never removed (they can't - cf https://github.com/kubernetes-sigs/controller-runtime/issues/1884)
-	// This isn't a big deal here, as the number of watches that we set is very limited and not meant to grow over and over
-	// (unless user keeps reconfiguring cert references endlessly)
-	err = w.ctrl.Watch(s)
-	if err != nil {
-		return err
-	}
-	return nil
+func (w *Watcher) getDefaultNamespace() string {
+	w.wmut.RLock()
+	defer w.wmut.RUnlock()
+	return w.defaultNamespace
 }
 
 func (w *Watcher) ProcessMTLSCerts(ctx context.Context, cl helper.Client, tls *flowslatest.ClientTLS, targetNamespace string) (caDigest string, userDigest string, err error) {
@@ -193,11 +144,18 @@ func (w *Watcher) reconcile(ctx context.Context, cl helper.Client, ref objectRef
 	obj := watchable.ProvidePlaceholder()
 	err := cl.Get(ctx, types.NamespacedName{Name: ref.name, Namespace: ref.namespace}, obj)
 	if err != nil {
+		if ref.kind == flowslatest.RefTypeSecret && errors.IsForbidden(err) {
+			// Hint for user about manual secret watching setup
+			return "", fmt.Errorf("make sure you grant Secret access permissions to the operator: "+
+				"kubectl create rolebinding secret-watcher -n %s --clusterrole=netobserv-secret-watcher --serviceaccount=%s:netobserv-controller-manager"+
+				" ; kubectl create rolebinding secret-creator -n %s --clusterrole=netobserv-secret-creator --serviceaccount=%s:netobserv-controller-manager"+
+				" - error was: %w", ref.namespace, w.operatorNamespace, destNamespace, w.operatorNamespace, err)
+		}
 		return "", err
 	}
-	err = w.watch(ctx, cl.Client.(*narrowcache.Client), ref.kind, obj)
+	err = w.ctrlQ.EnqueueOnChange(ctx, obj, reconcile.Request{NamespacedName: constants.FlowCollectorName})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("narrowcache EnqueueOnChange error: %w", err)
 	}
 	digest, err := watchable.GetDigest(obj, ref.keys)
 	if err != nil {
@@ -220,6 +178,12 @@ func (w *Watcher) reconcile(ctx context.Context, cl helper.Client, ref objectRef
 				},
 			})
 			if err := cl.CreateOwned(ctx, obj); err != nil {
+				if ref.kind == flowslatest.RefTypeSecret && errors.IsForbidden(err) {
+					// Hint for user about manual secret watching setup
+					return "", fmt.Errorf("make sure you grant Secret write permissions to the operator: "+
+						"kubectl create rolebinding secret-creator -n %s --clusterrole=netobserv-secret-creator --serviceaccount=%s:netobserv-controller-manager"+
+						" - error was: %w", destNamespace, w.operatorNamespace, err)
+				}
 				return "", err
 			}
 		} else {
@@ -233,6 +197,12 @@ func (w *Watcher) reconcile(ctx context.Context, cl helper.Client, ref objectRef
 				rlog.Info(fmt.Sprintf("updating %s %s in namespace %s", ref.kind, ref.name, destNamespace))
 				watchable.PrepareForUpdate(obj, target)
 				if err := cl.UpdateOwned(ctx, target, target); err != nil {
+					if ref.kind == flowslatest.RefTypeSecret && errors.IsForbidden(err) {
+						// Hint for user about manual secret watching setup
+						return "", fmt.Errorf("make sure you grant Secret write permissions to the operator: "+
+							"kubectl create rolebinding secret-creator -n %s --clusterrole=netobserv-secret-creator --serviceaccount=%s:netobserv-controller-manager"+
+							" - error was: %w", destNamespace, w.operatorNamespace, err)
+					}
 					return "", err
 				}
 			}

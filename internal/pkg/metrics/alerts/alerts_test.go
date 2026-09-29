@@ -25,6 +25,7 @@ func allTemplates() []flowslatest.HealthRuleTemplate {
 		flowslatest.HealthRuleExternalIngressHighTrend,
 		flowslatest.HealthRuleIngress5xxErrors,
 		flowslatest.HealthRuleIngressHTTPLatencyTrend,
+		flowslatest.HealthRuleTLSInsecureVersion,
 	}
 }
 
@@ -257,6 +258,57 @@ func TestBuildRules_DisableTakesPrecedence(t *testing.T) {
 	assert.Empty(t, rules)
 }
 
+func TestDNSNxDomainPromql(t *testing.T) {
+	variant := flowslatest.HealthRuleVariant{
+		GroupBy: flowslatest.GroupByNamespace,
+		Thresholds: flowslatest.HealthRuleThresholds{
+			Warning: "5",
+			Info:    "2",
+		},
+	}
+	healthRules, err := buildHealthRulesForVariant(flowslatest.HealthRuleDNSNxDomain, flowslatest.ModeAlert, &variant, []string{"namespace_dns_flows_total"})
+	assert.NoError(t, err)
+
+	var builtRules []*monitoringv1.Rule
+	for _, hr := range healthRules {
+		mr, err := hr.Build()
+		assert.NoError(t, err)
+		if mr != nil {
+			builtRules = append(builtRules, mr)
+		}
+	}
+	assert.NotEmpty(t, builtRules)
+	for _, mr := range builtRules {
+		assert.Contains(t, mr.Expr.StrVal, "netobserv_namespace_dns_flows_total{")
+		assert.Contains(t, mr.Expr.StrVal, `DnsFlagsResponseCode="NXDomain"`)
+	}
+}
+
+func TestDNSErrorsPromql(t *testing.T) {
+	variant := flowslatest.HealthRuleVariant{
+		GroupBy: flowslatest.GroupByNamespace,
+		Thresholds: flowslatest.HealthRuleThresholds{
+			Warning: "10",
+		},
+	}
+	healthRules, err := buildHealthRulesForVariant(flowslatest.HealthRuleDNSErrors, flowslatest.ModeAlert, &variant, []string{"namespace_dns_flows_total"})
+	assert.NoError(t, err)
+
+	var builtRules []*monitoringv1.Rule
+	for _, hr := range healthRules {
+		mr, err := hr.Build()
+		assert.NoError(t, err)
+		if mr != nil {
+			builtRules = append(builtRules, mr)
+		}
+	}
+	assert.NotEmpty(t, builtRules)
+	for _, mr := range builtRules {
+		assert.Contains(t, mr.Expr.StrVal, "netobserv_namespace_dns_flows_total{")
+		assert.Contains(t, mr.Expr.StrVal, `DnsFlagsResponseCode!~"NoError|NXDomain"`)
+	}
+}
+
 func TestLatencyPromql(t *testing.T) {
 	variant := flowslatest.HealthRuleVariant{
 		GroupBy: flowslatest.GroupByNamespace,
@@ -319,4 +371,101 @@ func TestAllAlertsHaveRunbookURL(t *testing.T) {
 			assert.Contains(t, url, ".md", "Alert %s runbook_url doesn't end with .md: %s", rule.Alert, url)
 		}
 	}
+}
+
+func TestBuildRules_TLSAlerts(t *testing.T) {
+	fc := flowslatest.FlowCollectorSpec{
+		Agent: flowslatest.FlowCollectorAgent{
+			EBPF: flowslatest.FlowCollectorEBPF{
+				Privileged: true,
+				Features: []flowslatest.AgentFeature{
+					flowslatest.TLSTracking,
+				},
+			},
+		},
+		Processor: flowslatest.FlowCollectorFLP{
+			Metrics: flowslatest.FLPMetrics{
+				DisableAlerts: allTemplatesBut(flowslatest.HealthRuleTLSInsecureVersion),
+				HealthRules: &[]flowslatest.FLPHealthRule{
+					{
+						Template: flowslatest.HealthRuleTLSInsecureVersion,
+						Variants: []flowslatest.HealthRuleVariant{
+							{
+								Thresholds: flowslatest.HealthRuleThresholds{
+									Warning: "5",
+								},
+								GroupBy: flowslatest.GroupByNamespace,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	rules := BuildMonitoringRules(context.Background(), &fc)
+
+	// Verify TLS alert exists
+	r := findRule("TLSInsecureVersion_PerSrcNamespaceWarning", rules)
+	assert.NotNil(t, r)
+	assert.Contains(t, r.Annotations["description"], "insecure TLS versions")
+	assert.Contains(t, r.Expr.StrVal, `TLSVersion=~"TLS 1\\.0|TLS 1\\.1|SSL.*"`)
+}
+
+func TestBuildRules_TLSAlertsDisabled(t *testing.T) {
+	fc := flowslatest.FlowCollectorSpec{
+		Agent: flowslatest.FlowCollectorAgent{
+			EBPF: flowslatest.FlowCollectorEBPF{
+				Privileged: true,
+				Features:   []flowslatest.AgentFeature{flowslatest.TLSTracking},
+			},
+		},
+		Processor: flowslatest.FlowCollectorFLP{
+			Metrics: flowslatest.FLPMetrics{
+				DisableAlerts: []flowslatest.HealthRuleTemplate{
+					flowslatest.HealthRuleTLSInsecureVersion,
+				},
+			},
+		},
+	}
+	rules := BuildMonitoringRules(context.Background(), &fc)
+
+	// Verify TLS alert is not present when disabled
+	r := findRule("TLSInsecureVersion_PerSrcNamespaceWarning", rules)
+	assert.Nil(t, r)
+}
+
+func TestBuildRules_TLSAlertsRequiresTLSTracking(t *testing.T) {
+	fc := flowslatest.FlowCollectorSpec{
+		Agent: flowslatest.FlowCollectorAgent{
+			EBPF: flowslatest.FlowCollectorEBPF{
+				Privileged: true,
+				Features: []flowslatest.AgentFeature{
+					// TLS tracking NOT enabled
+					flowslatest.DNSTracking,
+				},
+			},
+		},
+		Processor: flowslatest.FlowCollectorFLP{
+			Metrics: flowslatest.FLPMetrics{
+				HealthRules: &[]flowslatest.FLPHealthRule{
+					{
+						Template: flowslatest.HealthRuleTLSInsecureVersion,
+						Variants: []flowslatest.HealthRuleVariant{
+							{
+								Thresholds: flowslatest.HealthRuleThresholds{
+									Warning: "5",
+								},
+								GroupBy: flowslatest.GroupByNamespace,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	rules := BuildMonitoringRules(context.Background(), &fc)
+
+	// Verify TLS alert is not present when TLS tracking is disabled
+	r := findRule("TLSInsecureVersion_PerSrcNamespaceWarning", rules)
+	assert.Nil(t, r)
 }

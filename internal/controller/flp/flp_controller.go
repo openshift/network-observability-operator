@@ -17,6 +17,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/controller/reconcilers"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager"
+	"github.com/netobserv/netobserv-operator/internal/pkg/manager/enqueuer"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
 	"github.com/netobserv/netobserv-operator/internal/pkg/watchers"
 	appsv1 "k8s.io/api/apps/v1"
@@ -29,10 +30,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const (
+	ctrlName = "flp"
+)
+
 // Reconciler reconciles the current flowlogs-pipeline state with the desired configuration
 type Reconciler struct {
 	client.Client
 	mgr              *manager.Manager
+	ctrlQ            enqueuer.Static
 	watcher          *watchers.Watcher
 	status           status.Instance
 	currentNamespace string
@@ -49,7 +55,7 @@ func Start(ctx context.Context, mgr *manager.Manager) (manager.PostCreateHook, e
 	}
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&flowslatest.FlowCollector{}, reconcilers.IgnoreStatusChange).
-		Named("flp").
+		Named(ctrlName).
 		Owns(&appsv1.Deployment{}, reconcilers.UpdateOrDeleteOnlyPred).
 		Owns(&appsv1.DaemonSet{}, reconcilers.UpdateOrDeleteOnlyPred).
 		Owns(&ascv2.HorizontalPodAutoscaler{}, reconcilers.UpdateOrDeleteOnlyPred).
@@ -62,7 +68,7 @@ func Start(ctx context.Context, mgr *manager.Manager) (manager.PostCreateHook, e
 				if o.GetNamespace() == r.currentNamespace {
 					return []reconcile.Request{{NamespacedName: constants.FlowCollectorName}}
 				}
-				return []reconcile.Request{}
+				return nil
 			}),
 			reconcilers.IgnoreStatusChange,
 		).
@@ -76,7 +82,11 @@ func Start(ctx context.Context, mgr *manager.Manager) (manager.PostCreateHook, e
 	if err != nil {
 		return nil, err
 	}
-	r.watcher = watchers.NewWatcher(ctrl)
+	r.ctrlQ = mgr.NewStaticControllerEnqueuer(ctrlName, ctrl)
+	r.watcher = watchers.NewWatcher(
+		mgr.NewDynamicControllerEnqueuer(ctrlName+"-watcher", ctrl),
+		mgr.Config.Namespace,
+	)
 
 	return nil, nil
 }
@@ -102,8 +112,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 		return ctrl.Result{}, nil
 	}
 
-	r.status.SetUnknown()
-	defer r.status.Commit(ctx, r.Client)
+	// FlowCollector is being deleted: stop early, don't try to create or update anything
+	if reconcilers.IsMarkedForDeletion(fc) {
+		return ctrl.Result{}, nil
+	}
+
+	commit := r.status.Reset()
+	defer commit(ctx, r.Client)
 
 	err = r.reconcile(ctx, clh, fc)
 	if err != nil {
@@ -133,7 +148,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 func (r *Reconciler) reconcile(ctx context.Context, clh *helper.Client, fc *flowslatest.FlowCollector) error {
 	log := log.FromContext(ctx)
 
-	ns := fc.Spec.GetNamespace()
+	ns := helper.GetOperandsNamespace(&fc.Spec, r.mgr.Config)
 	r.currentNamespace = ns
 	previousNamespace := r.status.GetDeployedNamespace(fc)
 	loki := helper.NewLokiConfig(&fc.Spec.Loki, ns)
@@ -143,7 +158,7 @@ func (r *Reconciler) reconcile(ctx context.Context, clh *helper.Client, fc *flow
 
 	// Auto-detect subnets
 	var subnetLabels []flowslatest.SubnetLabel
-	if r.mgr.ClusterInfo.IsOpenShift() && fc.Spec.Processor.HasAutoDetectOpenShiftNetworks() {
+	if r.mgr.ClusterInfo.IsOpenShift() && fc.Spec.Processor.HasAutoDetectNetworks() {
 		var err error
 		subnetLabels, err = r.getOpenShiftSubnets(ctx)
 		if err != nil {
@@ -179,6 +194,7 @@ func (r *Reconciler) reconcile(ctx context.Context, clh *helper.Client, fc *flow
 	// `reconcilers.Common` is dependent on the FlowCollector object, which isn't known at start time.
 	images := map[reconcilers.ImageRef]string{reconcilers.MainImage: r.mgr.Config.FlowlogsPipelineImage}
 	reconcilers := []subReconciler{
+		newInformerReconciler(cmn.NewInstance(images, r.mgr.Status.ForComponent(status.FLPInformers))),
 		newMonolithReconciler(cmn.NewInstance(images, r.mgr.Status.ForComponent(status.FLPMonolith))),
 		newTransformerReconciler(cmn.NewInstance(images, r.mgr.Status.ForComponent(status.FLPTransformer))),
 	}
@@ -216,12 +232,14 @@ func (r *Reconciler) updateExporterStatuses(fc *flowslatest.FlowCollector) {
 
 func (r *Reconciler) newCommonInfo(clh *helper.Client, ns string, loki *helper.LokiConfig) reconcilers.Common {
 	return reconcilers.Common{
-		Client:       *clh,
-		Namespace:    ns,
-		ClusterInfo:  r.mgr.ClusterInfo,
-		Watcher:      r.watcher,
-		Loki:         loki,
-		IsDownstream: r.mgr.Config.DownstreamDeployment,
+		Enqueuer:    r.ctrlQ,
+		Client:      *clh,
+		Namespace:   ns,
+		ClusterInfo: r.mgr.ClusterInfo,
+		Watcher:     r.watcher,
+		Loki:        loki,
+		Vendor:      r.mgr.Config.Vendor,
+		TLSConfig:   r.mgr.ClusterInfo.GetComponentTLSConfig(),
 	}
 }
 

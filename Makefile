@@ -15,7 +15,7 @@ IMAGE_REGISTRY ?= quay.io
 REPO ?= $(IMAGE_REGISTRY)/$(IMAGE_ORG)
 
 # Component versions to use in bundle / release (do not use $VERSION for that)
-BUNDLE_VERSION ?= 1.11.4-community
+BUNDLE_VERSION ?= 2.0.0-community
 # console plugin
 export PLG_VERSION ?= v${BUNDLE_VERSION}
 # flowlogs-pipeline
@@ -29,6 +29,7 @@ SED ?= sed
 else
 SED ?= gsed
 endif
+export SED
 
 # Port-forward (for loki/grafana deployments)
 PORT_FWD ?= true
@@ -65,19 +66,25 @@ IMAGE_TAG_BASE ?= $(REPO)/network-observability-operator
 # You can use it as an arg. (E.g make bundle-build BUNDLE_IMAGE=<some-registry>/<project-name-bundle>:<tag>)
 BUNDLE_IMAGE ?= $(IMAGE_TAG_BASE)-bundle:v$(BUNDLE_VERSION)
 
-# BUNDLE_CONFIG is the config sources to use for OLM bundle - "config/openshift-olm" for OpenShift, or "config/k8s-olm" for upstream Kubernetes.
-BUNDLE_CONFIG ?= config/openshift-olm
+ifeq ("$(BUNDLE_TARGET)", "OpenShift")
+	BUNDLE_CONFIG = config/openshift/olm
+	BUNDLE_OUT = bundles/openshift
+else
+	BUNDLE_CONFIG = config/k8s/olm
+	BUNDLE_OUT = bundles/k8s
+endif
 
 # If we don't want to set bundle date (upon bundle update call), store current date
 ifneq ("$(BUNDLE_SET_DATE)", "true")
-	BUNDLE_STORED_DATE = $(shell grep "createdAt:" bundle/manifests/netobserv-operator.clusterserviceversion.yaml | sed -r 's/^.*createdAt:[ ]*(.*)/\1/')
+	BUNDLE_STORED_DATE = $(shell grep "createdAt:" $(BUNDLE_OUT)/manifests/netobserv-operator.clusterserviceversion.yaml | $(SED) -E 's/^.*createdAt:[ ]*(.*)/\1/')
 endif
 
 # Image URL to use all building/pushing image targets
 IMAGE ?= $(IMAGE_TAG_BASE):$(VERSION)
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.23
-GOLANGCI_LINT_VERSION = v2.8.0
+# When updating, update also SetupKubeBuilderAssets in internal/pkg/test/envtest.go
+ENVTEST_K8S_VERSION = 1.34
+GOLANGCI_LINT_VERSION = v2.12.2
 CRDOC_VERSION = 0.6.4
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -99,11 +106,59 @@ endif
 
 ifneq ($(CLEAN_BUILD),)
 	BUILD_DATE := $(shell date +%Y-%m-%d\ %H:%M)
-	BUILD_SHA := $(shell git rev-parse --short HEAD)
+	BUILD_SHA := $(shell git rev-parse --short=8 HEAD)
 	LDFLAGS ?= -X 'main.buildVersion=${VERSION}-${BUILD_SHA}' -X 'main.buildDate=${BUILD_DATE}'
 endif
 
 DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# When PIN_DIGEST is true, store all digests in variables, and export them to avoid
+# duplicate image inspections on nested make calls
+# Pinning assumes quay.io/netobserv images; currently not supported for fork builds (contributions are welcome)
+ifeq ("$(PIN_DIGEST)", "true")
+ifndef OPERATOR_DIGEST
+# would fail with podman, not supported so far (podman needs pull before running inspect) ; support can be added if needed, or through skopeo
+# podman pull $image && podman inspect $image --format '{{.Digest}}'
+OPERATOR_DIGEST := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-operator:$(VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
+endif
+$(info Pinning operator: $(VERSION) => $(OPERATOR_DIGEST))
+ifndef BPF_DIGEST
+BPF_DIGEST := $(shell docker buildx imagetools inspect quay.io/netobserv/netobserv-ebpf-agent:$(BPF_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
+endif
+$(info Pinning eBPF Agent: $(BPF_VERSION) => $(BPF_DIGEST))
+ifndef FLP_DIGEST
+FLP_DIGEST := $(shell docker buildx imagetools inspect quay.io/netobserv/flowlogs-pipeline:$(FLP_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
+endif
+$(info Pinning FLP: $(FLP_VERSION) => $(FLP_DIGEST))
+ifndef PLG_DIGEST
+PLG_DIGEST := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
+endif
+$(info Pinning console plugin: $(PLG_VERSION) => $(PLG_DIGEST))
+ifndef SWC_DIGEST
+SWC_DIGEST := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-standalone-frontend:$(PLG_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
+endif
+$(info Pinning standalone web console: $(PLG_VERSION) => $(SWC_DIGEST))
+
+# Only get pf4/5 digests for OpenShift bundles
+ifeq ("$(BUNDLE_TARGET)", "OpenShift")
+ifndef PLG_DIGEST_PF4
+PLG_DIGEST_PF4 := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf4 --format '{{json .Manifest.Digest}}' | tr -d '"')
+endif
+$(info Pinning console plugin (pf4): $(PLG_VERSION)-pf4 => $(PLG_DIGEST_PF4))
+ifndef PLG_DIGEST_PF5
+PLG_DIGEST_PF5 := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf5 --format '{{json .Manifest.Digest}}' | tr -d '"')
+endif
+$(info Pinning console plugin (pf5): $(PLG_VERSION)-pf5 => $(PLG_DIGEST_PF5))
+endif
+
+export OPERATOR_DIGEST BPF_DIGEST FLP_DIGEST PLG_DIGEST PLG_DIGEST_PF4 PLG_DIGEST_PF5 SWC_DIGEST
+endif
+
+ifeq ("$(PIN_DIGEST)", "true")
+BUNDLE_OPERATOR_IMAGE := quay.io/netobserv/network-observability-operator@$(OPERATOR_DIGEST)
+else
+BUNDLE_OPERATOR_IMAGE := $(IMAGE)
+endif
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # This is a requirement for 'setup-envtest.sh' in the test target.
@@ -111,14 +166,28 @@ DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
-NAMESPACE ?= netobserv
-
-# Local paths from preparing upstream release to OperatorHub
-ifeq ("$(BUNDLE_CONFIG)", "config/openshift-olm")
-	OPERATORHUB_PATH ?= "../community-operators-prod"
-else
-	OPERATORHUB_PATH ?= "../community-operators"
+.PHONY: validate-digests
+validate-digests:
+ifeq ("$(PIN_DIGEST)", "true")
+	@validate_digest() { \
+		local name="$$1" value="$$2"; \
+		if [[ ! "$$value" =~ ^sha256:[0-9a-f]{64}$$ ]]; then \
+			echo "Failed to resolve a valid $$name: $$value"; \
+			exit 1; \
+		fi; \
+	}; \
+	validate_digest OPERATOR_DIGEST "$(OPERATOR_DIGEST)"; \
+	validate_digest BPF_DIGEST "$(BPF_DIGEST)"; \
+	validate_digest FLP_DIGEST "$(FLP_DIGEST)"; \
+	validate_digest PLG_DIGEST "$(PLG_DIGEST)"; \
+	validate_digest SWC_DIGEST "$(SWC_DIGEST)"
+ifeq ("$(BUNDLE_TARGET)", "OpenShift")
+	@[[ "$(PLG_DIGEST_PF4)" =~ ^sha256:[0-9a-f]{64}$$ ]] || { echo "Failed to resolve a valid PLG_DIGEST_PF4: $(PLG_DIGEST_PF4)"; exit 1; }
+	@[[ "$(PLG_DIGEST_PF5)" =~ ^sha256:[0-9a-f]{64}$$ ]] || { echo "Failed to resolve a valid PLG_DIGEST_PF5: $(PLG_DIGEST_PF5)"; exit 1; }
 endif
+endif
+
+NAMESPACE ?= netobserv
 
 all: help
 
@@ -284,7 +353,7 @@ manifests: YQ controller-gen ## Generate WebhookConfiguration, ClusterRole and C
 	$(CONTROLLER_GEN) \
 	rbac:roleName=manager-role \
 	crd:crdVersions=v1 \
-	paths="./api/..." \
+	paths="{./api/...,./internal/pkg/manager}" \
 	output:crd:artifacts:config=config/crd/bases \
 	output:webhook:dir=./config/webhook \
 	webhook
@@ -340,6 +409,8 @@ fmt: ## Run go fmt against code.
 lint: prereqs ## Run linter (golangci-lint).
 	@echo "### Linting code"
 	./bin/golangci-lint-${GOLANGCI_LINT_VERSION} run --timeout 5m ./...
+	@echo "### Checking workflow security"
+	./hack/check-workflow-security.sh
 
 test: envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test ./api/... ./internal/... -coverpkg="./api/... ./internal/..." -coverprofile cover.out
@@ -393,7 +464,6 @@ tar-image: image-build ## Build single arch (amd64) and save as a tar
 	$(OCI_BIN) tag $(IMAGE)-amd64 $(IMAGE)
 	mkdir -p ./out
 	$(OCI_BIN) save -o out/operator.tar $(IMAGE)
-	echo $(IMAGE) > ./out/operator-name
 
 ##@ Deployment
 
@@ -403,25 +473,38 @@ install: kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/con
 uninstall: kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/crd | kubectl --ignore-not-found=true delete -f - || true
 
-set-manager-images: kustomize ## Update image references
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMAGE}
-	$(SED) -i -r '/RELATED_IMAGE_EBPF_AGENT$$/{ n; s~value:.+$$~value: quay.io/netobserv/netobserv-ebpf-agent:$(BPF_VERSION)~}' ./config/manager/manager.yaml
-	$(SED) -i -r '/RELATED_IMAGE_FLOWLOGS_PIPELINE$$/{ n; s~value:.+$$~value: quay.io/netobserv/flowlogs-pipeline:$(FLP_VERSION)~}' ./config/manager/manager.yaml
-	$(SED) -i -r '/RELATED_IMAGE_CONSOLE_PLUGIN$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)~}' ./config/manager/manager.yaml
-	$(SED) -i -r '/RELATED_IMAGE_CONSOLE_PLUGIN_PF4$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf4~}' ./config/manager/manager.yaml
-	$(SED) -i -r '/RELATED_IMAGE_CONSOLE_PLUGIN_PF5$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf5~}' ./config/manager/manager.yaml
+set-manager-images: validate-digests kustomize ## Update image references
+ifeq ("$(PIN_DIGEST)", "true")
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(BUNDLE_OPERATOR_IMAGE)
+	$(SED) -i -E "/RELATED_IMAGE_EBPF_AGENT$$/{ n; s~value:.+$$~value: quay.io/netobserv/netobserv-ebpf-agent@$(BPF_DIGEST)~}" ./config/manager/manager.yaml
+	$(SED) -i -E "/RELATED_IMAGE_FLOWLOGS_PIPELINE$$/{ n; s~value:.+$$~value: quay.io/netobserv/flowlogs-pipeline@$(FLP_DIGEST)~}" ./config/manager/manager.yaml
+	$(SED) -i -E "/RELATED_IMAGE_WEB_CONSOLE$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin@$(PLG_DIGEST)~}" ./config/manager/manager.yaml
+ifeq ("$(BUNDLE_TARGET)", "OpenShift")
+	$(SED) -i -E "/RELATED_IMAGE_WEB_CONSOLE_PF4$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin@$(PLG_DIGEST_PF4)~}" ./config/openshift/common/manager-patch.yaml
+	$(SED) -i -E "/RELATED_IMAGE_WEB_CONSOLE_PF5$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin@$(PLG_DIGEST_PF5)~}" ./config/openshift/common/manager-patch.yaml
+endif
+else
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE)
+	$(SED) -i -E '/RELATED_IMAGE_EBPF_AGENT$$/{ n; s~value:.+$$~value: quay.io/netobserv/netobserv-ebpf-agent:$(BPF_VERSION)~}' ./config/manager/manager.yaml
+	$(SED) -i -E '/RELATED_IMAGE_FLOWLOGS_PIPELINE$$/{ n; s~value:.+$$~value: quay.io/netobserv/flowlogs-pipeline:$(FLP_VERSION)~}' ./config/manager/manager.yaml
+	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)~}' ./config/manager/manager.yaml
+ifeq ("$(BUNDLE_TARGET)", "OpenShift")
+	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE_PF4$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf4~}' ./config/openshift/common/manager-patch.yaml
+	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE_PF5$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf5~}' ./config/openshift/common/manager-patch.yaml
+endif
+endif
 
 deploy: BPF_VERSION=main
 deploy: FLP_VERSION=main
 deploy: PLG_VERSION=main
 deploy: kustomize set-manager-images ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/openshift | sed -r "s/openshift-netobserv-operator\.svc/${NAMESPACE}.svc/" | kubectl apply --server-side --force-conflicts -f -
+	$(KUSTOMIZE) build config/openshift | kubectl apply --server-side --force-conflicts -f -
 	kubectl get ns openshift-netobserv-operator || kubectl create ns openshift-netobserv-operator
-	cat bundle/manifests/netobserv-operator.clusterserviceversion.yaml | sed -r "s/operators.coreos.com\/v1/operators.coreos.com\/v1alpha1/" | sed -r "s/placeholder/openshift-netobserv-operator/" | kubectl apply --server-side --force-conflicts -f -
+	cat $(BUNDLE_OUT)/manifests/netobserv-operator.clusterserviceversion.yaml | $(SED) -E "s/operators.coreos.com\/v1/operators.coreos.com\/v1alpha1/" | $(SED) -E "s/placeholder/openshift-netobserv-operator/" | kubectl apply --server-side --force-conflicts -f -
 
 undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/openshift | kubectl --ignore-not-found=true delete -f - || true
-	cat bundle/manifests/netobserv-operator.clusterserviceversion.yaml | sed -r "s/operators.coreos.com\/v1/operators.coreos.com\/v1alpha1/" | sed -r "s/placeholder/openshift-netobserv-operator/" | kubectl --ignore-not-found=true delete -f - || true
+	cat $(BUNDLE_OUT)/manifests/netobserv-operator.clusterserviceversion.yaml | $(SED) -E "s/operators.coreos.com\/v1/operators.coreos.com\/v1alpha1/" | $(SED) -E "s/placeholder/openshift-netobserv-operator/" | kubectl --ignore-not-found=true delete -f - || true
 
 run: fmt lint ## Run a controller from your host.
 	go run ./main.go
@@ -429,28 +512,41 @@ run: fmt lint ## Run a controller from your host.
 ##@ OLM
 
 .PHONY: bundle-nogen
-bundle-nogen: OPSDK kustomize set-manager-images ## Generate final bundle files, without prior code/doc generation.
-	$(SED) -i -r 's~netobserv-operator/blob/[^/]+/~netobserv-operator/blob/$(VERSION)/~g' ./config/csv/bases/netobserv-operator.clusterserviceversion.yaml
-	$(SED) -i -r 's~netobserv-operator/blob/[^/]+/~netobserv-operator/blob/$(VERSION)/~g' ./config/descriptions/upstream.md
-	$(SED) -i -r 's~netobserv-operator/blob/[^/]+/~netobserv-operator/blob/$(VERSION)/~g' ./config/descriptions/ocp.md
-	rm -r bundle/manifests || true
-	rm -r bundle/metadata || true
-	cp ./config/csv/bases/netobserv-operator.clusterserviceversion.yaml tmp-csv
-	hack/crd2csvSpecDesc.sh v1beta2
-	$(SED) -e 's/^/    /' config/descriptions/upstream.md > tmp-desc
-	$(KUSTOMIZE) build $(BUNDLE_CONFIG) \
-		| $(SED) -e 's~:container-image:~$(IMAGE)~' \
-		| $(SED) -e "/':full-description:'/r tmp-desc" \
-		| $(SED) -e "s/':full-description:'/|\-/" \
-		| $(OPSDK) generate bundle -q --overwrite --version $(BUNDLE_VERSION) $(BUNDLE_METADATA_OPTS)
+bundle-nogen: YQ OPSDK kustomize set-manager-images ## Generate final bundle files, without prior code/doc generation.
+	$(SED) -i -E 's~netobserv-operator/blob/[^/]+/~netobserv-operator/blob/$(VERSION)/~g' $(BUNDLE_CONFIG)/description.md
+	rm -r $(BUNDLE_OUT)/manifests || true
+	rm -r $(BUNDLE_OUT)/metadata || true
+# Dissociate kustomize builds csv, samples and the rest, because they don't share exactly the same properties (like namespace injection)
+# OLM discards CRBs with empty subjects, so inject a temporary placeholder for generation, then empty subjects in the output.
+# We work on copies to avoid leaving dirty files on error.
+	CRB_FILES="config/rbac/component_role_bindings.yaml"; \
+	for f in $$CRB_FILES; do cp "$$f" "$$f.bak"; done; \
+	trap 'for f in $$CRB_FILES; do mv "$$f.bak" "$$f"; done' EXIT; \
+	for f in $$CRB_FILES; do \
+		$(YQ) -i '(select(.kind == "ClusterRoleBinding") | .subjects) = [{"kind": "ServiceAccount", "name": "SUBJECT_PLACEHOLDER"}]' "$$f"; \
+	done; \
+	( \
+		($(KUSTOMIZE) build config/csv \
+			| $(YQ) '.metadata.annotations.containerImage = "$(BUNDLE_OPERATOR_IMAGE)"' \
+			| $(YQ) '.spec.description = load_str("$(BUNDLE_CONFIG)/description.md")' \
+		); \
+		echo "---"; $(KUSTOMIZE) build config/samples; \
+		echo "---"; $(KUSTOMIZE) build $(BUNDLE_CONFIG) \
+	) | $(OPSDK) generate bundle --output-dir $(BUNDLE_OUT) -q --overwrite --version $(BUNDLE_VERSION) $(BUNDLE_METADATA_OPTS); \
+	for f in $$CRB_FILES; do mv "$$f.bak" "$$f"; done; \
+	trap - EXIT; \
+	for file in $$(grep -rl 'SUBJECT_PLACEHOLDER' $(BUNDLE_OUT)/manifests/); do \
+		$(YQ) -i '.subjects = []' "$$file"; \
+	done
 # Restore previous date?
 ifneq ("$(BUNDLE_SET_DATE)", "true")
-	$(SED) -i 's/createdAt:.*/createdAt: ${BUNDLE_STORED_DATE}/' bundle/manifests/netobserv-operator.clusterserviceversion.yaml
+	$(SED) -i 's/createdAt:.*/createdAt: ${BUNDLE_STORED_DATE}/' $(BUNDLE_OUT)/manifests/netobserv-operator.clusterserviceversion.yaml
 endif
-	mv tmp-csv ./config/csv/bases/netobserv-operator.clusterserviceversion.yaml
-	rm tmp-desc
+# CRD overrides
+	(shopt -s nullglob ; for file in $(BUNDLE_CONFIG)/crd-doc-override/*.yaml; do f="$$file" $(YQ) -i ".spec.versions[0].schema.openAPIV3Schema.properties *= load(env(f))" "$(BUNDLE_OUT)/manifests/$$(basename $$file)" ; done)
+
 	sh -c '\
-	VALIDATION_OUTPUT=$$($(OPSDK) bundle validate ./bundle --select-optional suite=operatorframework); \
+	VALIDATION_OUTPUT=$$($(OPSDK) bundle validate $(BUNDLE_OUT) --select-optional suite=operatorframework); \
 	echo $${VALIDATION_OUTPUT}; \
 	if [ $$(echo $${VALIDATION_OUTPUT} | grep -i 'warning' | wc -c) -gt 0 ]; then echo "please correct warnings and errors first"; exit -1 ; fi \
 	'
@@ -459,16 +555,17 @@ endif
 bundle: generate bundle-nogen ## Generate final bundle files, including prior code/doc generation.
 
 .PHONY: update-bundle
-update-bundle: VERSION=$(BUNDLE_VERSION)
-update-bundle: IMAGE_ORG=netobserv
-update-bundle: bundle ## Prepare a clean bundle to be commited
+update-bundle: YQ ## Prepare clean bundles to be commited
+	$(SED) -i -E 's~netobserv-operator/blob/[^/]+/~netobserv-operator/blob/$(BUNDLE_VERSION)/~g' ./config/csv/bases/netobserv-operator.clusterserviceversion.yaml
+	cp ./config/csv/bases/netobserv-operator.clusterserviceversion.yaml ./config/csv/bases/transformed-csv.yaml
+	hack/crd2csvSpecDesc.sh v1beta2
+	$(MAKE) bundle VERSION=$(BUNDLE_VERSION) IMAGE_ORG=netobserv
+	$(MAKE) bundle VERSION=$(BUNDLE_VERSION) IMAGE_ORG=netobserv BUNDLE_TARGET=OpenShift
 	$(MAKE) helm-update
 
 .PHONY: bundle-build
 bundle-build: ## Build the bundle image.
-	cp ./bundle/manifests/netobserv-operator.clusterserviceversion.yaml tmp-bundle
 	-$(OCI_BIN) build $(OCI_BUILD_OPTS) --label version=${BUNDLE_VERSION} --label vcs-ref=${BUILD_SHA} -f bundle.Dockerfile -t $(BUNDLE_IMAGE) .
-	mv tmp-bundle ./bundle/manifests/netobserv-operator.clusterserviceversion.yaml
 
 .PHONY: bundle-push
 bundle-push: ## Push the bundle image.
@@ -478,7 +575,6 @@ bundle-push: ## Push the bundle image.
 bundle-tar: bundle-build ## Build bundle image and save as a tar
 	mkdir -p ./out
 	$(OCI_BIN) save -o out/bundle.tar $(BUNDLE_IMAGE)
-	echo $(BUNDLE_IMAGE) > ./out/bundle-name
 
 # A comma-separated list of bundle images (e.g. make catalog-build BUNDLE_IMAGES=example.com/operator-bundle:v0.1.0,example.com/operator-bundle:v0.2.0).
 # These images MUST exist in a registry and be pull-able.
@@ -521,7 +617,6 @@ catalog-tar: ## Build catalog image and save as a tar
 	$(MAKE) catalog-build CATALOG_IMAGE=temp-catalog
 	echo "FROM temp-catalog" | $(OCI_BIN) build --label quay.expires-after=2w -t $(CATALOG_IMAGE) -
 	$(OCI_BIN) save -o out/catalog.tar $(CATALOG_IMAGE)
-	echo $(CATALOG_IMAGE) > ./out/catalog-name
 
 ##@ Misc
 
@@ -533,13 +628,13 @@ test-workflow: ## Run some tests on this Makefile and the github workflow
 related-release-notes: ## Grab release notes for related components (to be inserted in operator's release note upstream, cf RELEASE.md)
 	echo -e "## Related components\n\n" > /tmp/related.md
 	echo -e "<details><summary><b>eBPF Agent</b></summary>\n\n" >> /tmp/related.md
-	curl -s  https://api.github.com/repos/netobserv/netobserv-ebpf-agent/releases/tags/$(BPF_VERSION) | jq -r .body | xargs -0 printf "%b" | sed -r "s/##/###/" >> /tmp/related.md
+	curl -s  https://api.github.com/repos/netobserv/netobserv-ebpf-agent/releases/tags/$(BPF_VERSION) | jq -r .body | xargs -0 printf "%b" | $(SED) -E "s/##/###/" >> /tmp/related.md
 	echo -e "</details>\n" >> /tmp/related.md
 	echo -e "<details><summary><b>Flowlogs-Pipeline</b></summary>\n\n" >> /tmp/related.md
-	curl -s  https://api.github.com/repos/netobserv/flowlogs-pipeline/releases/tags/$(FLP_VERSION) | jq -r .body | xargs -0 printf "%b" | sed -r "s/##/###/" >> /tmp/related.md
+	curl -s  https://api.github.com/repos/netobserv/flowlogs-pipeline/releases/tags/$(FLP_VERSION) | jq -r .body | xargs -0 printf "%b" | $(SED) -E "s/##/###/" >> /tmp/related.md
 	echo -e "</details>\n" >> /tmp/related.md
 	echo -e "<details><summary><b>Web Console</b></summary>\n\n" >> /tmp/related.md
-	curl -s  https://api.github.com/repos/netobserv/netobserv-web-console/releases/tags/$(PLG_VERSION) | jq -r .body | xargs -0 printf "%b" | sed -r "s/##/###/" >> /tmp/related.md
+	curl -s  https://api.github.com/repos/netobserv/netobserv-web-console/releases/tags/$(PLG_VERSION) | jq -r .body | xargs -0 printf "%b" | $(SED) -E "s/##/###/" >> /tmp/related.md
 	echo -e "</details>\n" >> /tmp/related.md
 	wl-copy < /tmp/related.md
 	cat /tmp/related.md
@@ -547,19 +642,38 @@ related-release-notes: ## Grab release notes for related components (to be inser
 
 # Update helm templates
 .PHONY: helm-update
-helm-update: YQ ## Update helm template
-	sed -i -r 's/^appVersion:.*/appVersion: $(BUNDLE_VERSION)/g' helm/Chart.yaml
-	sed -i -r 's/^version:.*/version: $(BUNDLE_VERSION:%-community=%)/g' helm/Chart.yaml
-	yq -i '.ebpfAgent.version="v$(BUNDLE_VERSION)"' helm/values.yaml
-	yq -i '.flowlogsPipeline.version="v$(BUNDLE_VERSION)"' helm/values.yaml
-	yq -i '.consolePlugin.version="v$(BUNDLE_VERSION)"' helm/values.yaml
-	yq -i '.standaloneConsole.version="v$(BUNDLE_VERSION)"' helm/values.yaml
-	yq -i '.operator.version="$(BUNDLE_VERSION)"' helm/values.yaml
+helm-update: validate-digests YQ ## Update helm template
+	$(SED) -i -E 's/^appVersion:.*/appVersion: $(BUNDLE_VERSION)/g' helm/Chart.yaml
+	$(SED) -i -E 's/^version:.*/version: $(BUNDLE_VERSION:%-community=%)/g' helm/Chart.yaml
+ifeq ("$(PIN_DIGEST)", "true")
+# Configure digests and remove tag-based config
+	$(YQ) -i '.ebpfAgent.digest="$(BPF_DIGEST)"' helm/values.yaml
+	$(YQ) -i '.flowlogsPipeline.digest="$(FLP_DIGEST)"' helm/values.yaml
+	$(YQ) -i '.consolePlugin.digest="$(PLG_DIGEST)"' helm/values.yaml
+	$(YQ) -i '.standaloneConsole.digest="$(SWC_DIGEST)"' helm/values.yaml
+	$(YQ) -i '.operator.digest="$(OPERATOR_DIGEST)"' helm/values.yaml
+	$(YQ) -i 'del(.ebpfAgent.version)' helm/values.yaml
+	$(YQ) -i 'del(.flowlogsPipeline.version)' helm/values.yaml
+	$(YQ) -i 'del(.consolePlugin.version)' helm/values.yaml
+	$(YQ) -i 'del(.standaloneConsole.version)' helm/values.yaml
+	$(YQ) -i 'del(.operator.version)' helm/values.yaml
+else
+# Configure tags and remove digest-based config
+	$(YQ) -i '.ebpfAgent.version="v$(BUNDLE_VERSION)"' helm/values.yaml
+	$(YQ) -i '.flowlogsPipeline.version="v$(BUNDLE_VERSION)"' helm/values.yaml
+	$(YQ) -i '.consolePlugin.version="v$(BUNDLE_VERSION)"' helm/values.yaml
+	$(YQ) -i '.standaloneConsole.version="v$(BUNDLE_VERSION)"' helm/values.yaml
+	$(YQ) -i '.operator.version="$(BUNDLE_VERSION)"' helm/values.yaml
+	$(YQ) -i 'del(.ebpfAgent.digest)' helm/values.yaml
+	$(YQ) -i 'del(.flowlogsPipeline.digest)' helm/values.yaml
+	$(YQ) -i 'del(.consolePlugin.digest)' helm/values.yaml
+	$(YQ) -i 'del(.standaloneConsole.digest)' helm/values.yaml
+	$(YQ) -i 'del(.operator.digest)' helm/values.yaml
+endif
 	hack/helm-update.sh
 	cp LICENSE helm/
 
 include .mk/sample.mk
 include .mk/development.mk
 include .mk/local.mk
-include .mk/ocp.mk
 include .mk/shortcuts.mk

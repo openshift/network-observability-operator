@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
@@ -17,38 +18,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
-
-//+kubebuilder:rbac:groups=core,resources=namespaces;services;serviceaccounts;configmaps;persistentvolumeclaims;secrets,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=pods;nodes;endpoints,verbs=get;list;watch
-//+kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
-//+kubebuilder:rbac:groups=apps,resources=deployments;daemonsets,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
-//+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings;rolebindings,verbs=get;list;create;delete;update;watch
-//+kubebuilder:rbac:groups=console.openshift.io,resources=consoleplugins,verbs=get;create;delete;update;patch;list;watch
-//+kubebuilder:rbac:groups=operator.openshift.io,resources=consoles,verbs=get;list;update;watch
-//+kubebuilder:rbac:groups=operator.openshift.io,resources=networks,verbs=get;list;watch
-//+kubebuilder:rbac:groups=flows.netobserv.io,resources=flowcollectors;flowmetrics;flowcollectorslices,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=flows.netobserv.io,resources=flowcollectors/status;flowmetrics/status;flowcollectorslices/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=flows.netobserv.io,resources=flowcollectors/finalizers,verbs=update
-//+kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,resourceNames=hostnetwork,verbs=use
-//+kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,verbs=list;create;update;watch
-//+kubebuilder:rbac:groups=apiregistration.k8s.io,resources=apiservices,verbs=list;get;watch
-//+kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;prometheusrules,verbs=get;create;delete;update;patch;list;watch
-//+kubebuilder:rbac:groups=config.openshift.io,resources=clusterversions;networks,verbs=get;list;watch
-//+kubebuilder:rbac:groups=loki.grafana.com,resources=network,resourceNames=logs,verbs=create
-//+kubebuilder:rbac:groups=loki.grafana.com,resources=lokistacks,verbs=get;list;watch
-//+kubebuilder:rbac:groups=metrics.k8s.io,resources=pods,verbs=create
-//+kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=bpfman.io,resources=clusterbpfapplications,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=bpfman.io,resources=clusterbpfapplications/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
-//+kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions/status,verbs=update;patch
-//+kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=create;delete;patch;update;get;watch;list
-//+kubebuilder:rbac:groups=k8s.ovn.org,resources=userdefinednetworks;clusteruserdefinednetworks,verbs=get;list;watch
-//+kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
 
 type Registerer func(context.Context, *Manager) (PostCreateHook, error)
 type PostCreateHook = func(ctx context.Context) error
@@ -72,9 +47,39 @@ func NewManager(
 	log := log.FromContext(ctx)
 	log.Info("Creating manager")
 
+	// Step 1: Create discovery client (used by cluster.Info)
+	dc, err := discovery.NewDiscoveryClientForConfig(kcfg)
+	if err != nil {
+		return nil, fmt.Errorf("can't instantiate discovery client: %w", err)
+	}
+
+	// Step 2: Create cluster.Info (discovers APIs; fetches TLS profile on OpenShift)
+	log.Info("Discovering APIs")
+	info, postCreate, err := cluster.NewInfo(ctx, kcfg, dc)
+	if err != nil {
+		return nil, fmt.Errorf("can't collect cluster info: %w", err)
+	}
+	flowslatest.CurrentClusterInfo = info
+
+	// Step 3: Configure TLS for metrics and webhook servers
+	tlsCfg := info.GetTLSConfig()
+	applyTLSProfile := func(c *tls.Config) {
+		c.MinVersion = tlsCfg.MinVersion
+		c.CipherSuites = tlsCfg.CipherSuites
+		c.CurvePreferences = tlsCfg.CurvePreferences
+	}
+
+	if opts.Metrics.TLSOpts == nil {
+		opts.Metrics.TLSOpts = []func(*tls.Config){}
+	}
+	opts.Metrics.TLSOpts = append(opts.Metrics.TLSOpts, applyTLSProfile)
+
+	if ws, ok := opts.WebhookServer.(*webhook.DefaultServer); ok {
+		ws.Options.TLSOpts = append(ws.Options.TLSOpts, applyTLSProfile)
+	}
+
 	narrowCache := narrowcache.NewConfig(kcfg,
 		narrowcache.ConfigMaps,
-		narrowcache.ClusterRoles,
 		narrowcache.ClusterRoleBindings,
 		narrowcache.Daemonsets,
 		narrowcache.Deployments,
@@ -98,6 +103,7 @@ func NewManager(
 		},
 	}
 
+	// Step 4: Create controller-runtime manager with configured options
 	internalManager, err := ctrl.NewManager(kcfg, *opts)
 	if err != nil {
 		return nil, err
@@ -110,16 +116,10 @@ func NewManager(
 	statusMgr := status.NewManager()
 	statusMgr.SetEventRecorder(internalManager.GetEventRecorderFor("flowcollector-controller")) //nolint:staticcheck
 
-	log.Info("Discovering APIs")
-	dc, err := discovery.NewDiscoveryClientForConfig(kcfg)
-	if err != nil {
-		return nil, fmt.Errorf("can't instantiate discovery client: %w", err)
-	}
-	info, postCreate, err := cluster.NewInfo(ctx, kcfg, dc, func() { statusMgr.Sync(ctx, client) })
-	if err != nil {
-		return nil, fmt.Errorf("can't collect cluster info: %w", err)
-	}
-	flowslatest.CurrentClusterInfo = info
+	// Update cluster.Info's onRefresh callback now that we have the real client
+	info.SetOnRefresh(func() { statusMgr.Sync(ctx, client) })
+	// Update global for validation webhook
+	flowslatest.OperatorNamespace = opcfg.Namespace
 
 	this := &Manager{
 		Manager:     internalManager,
@@ -161,4 +161,42 @@ func NewManager(
 
 func (m *Manager) GetClient() client.Client {
 	return m.Client
+}
+
+// StaticControllerEnqueuer creates a static enqueuer (implements enqueuer.Static), intended for tracking static resources with always-enabled watch
+type StaticControllerEnqueuer struct {
+	group string
+	ctrl  controller.Controller
+	nc    *narrowcache.Client
+}
+
+// NewStaticControllerEnqueuer creates a static enqueuer (implements enqueuer.Static), intended for tracking static resources with always-enabled watch
+func (m *Manager) NewStaticControllerEnqueuer(group string, ctrl controller.Controller) *StaticControllerEnqueuer {
+	return &StaticControllerEnqueuer{group: group, ctrl: ctrl, nc: m.Client.(*narrowcache.Client)}
+}
+
+func (c *StaticControllerEnqueuer) EnqueueOnChange(ctx context.Context, obj client.Object, req reconcile.Request) error {
+	return c.nc.SafeEnqueueRequestOnEvents(ctx, c.group, c.ctrl, obj, req, false)
+}
+
+// DynamicControllerEnqueuer creates a dynamic enqueuer (implements enqueuer.Dynamic),
+// intended for tracking dynamic resources, tracking the watch status (active/inactive)
+type DynamicControllerEnqueuer struct {
+	group string
+	ctrl  controller.Controller
+	nc    *narrowcache.Client
+}
+
+// NewDynamicControllerEnqueuer creates a dynamic enqueuer (implements enqueuer.Dynamic),
+// intended for tracking dynamic resources, tracking the watch status (active/inactive)
+func (m *Manager) NewDynamicControllerEnqueuer(group string, ctrl controller.Controller) *DynamicControllerEnqueuer {
+	return &DynamicControllerEnqueuer{group: group, ctrl: ctrl, nc: m.Client.(*narrowcache.Client)}
+}
+
+func (c *DynamicControllerEnqueuer) EnqueueOnChange(ctx context.Context, obj client.Object, req reconcile.Request) error {
+	return c.nc.SafeEnqueueRequestOnEvents(ctx, c.group, c.ctrl, obj, req, true)
+}
+
+func (c *DynamicControllerEnqueuer) ResetActiveWatches() {
+	c.nc.ResetActiveWatches(c.group)
 }

@@ -6,7 +6,7 @@ Best practices for AI coding agents on NetObserv Operator.
 
 ## Project Context
 
-**NetObserv Operator** - Kubernetes/OpenShift operator for network observability
+**NetObserv Operator** - Kubernetes operator for network observability
 (operator-sdk)
 
 **Components:**
@@ -14,15 +14,19 @@ Best practices for AI coding agents on NetObserv Operator.
   flow generation from packets (DaemonSet)
 - **[flowlogs-pipeline](https://github.com/netobserv/flowlogs-pipeline)**: Flow
   collection, enrichment, export (Deployment/StatefulSet) -
-  **[Console Plugin](https://github.com/netobserv/netobserv-web-console)**:
-  OpenShift visualization (optional)
+- **[Web Console](https://github.com/netobserv/netobserv-web-console)**:
+  Visualization console (either as standalone, or as a plugin for vendor (OpenShift console))
 - **CRD**: `FlowCollector` v1beta2 - **single cluster-wide resource named
   `cluster`**
 - **Integrations**: Loki (optional), Prometheus, Kafka (optional)
 
 **Key Directories:**
 - `api/flowcollector/v1beta2/`: CRD definitions
-- `internal/controller/`: Reconciliation logic
+- `internal/controller/`: Reconciliation logic (main controller, static
+  controller, per-component sub-reconcilers)
+- `internal/pkg/narrowcache/`: Custom cache layer — watches only explicitly
+  requested objects instead of full GVKs, to limit memory in large clusters.
+  All controllers use it (via the manager client).
 - `config/`: Kustomize manifests
 - `docs/`: FlowCollector spec, architecture
 
@@ -38,17 +42,23 @@ if flowCollector.Name != constants.FlowCollectorName {
 
 ### 🚨 Backward Compatibility
 FlowCollector v1beta2 is stable:
-- ✅ Add optional fields with defaults, use `+optional` marker
-- ❌ Never remove/rename fields or change types
+- ✅ Add optional fields, use `+optional` marker; defaults can be set either through OpenAPI or directly hardcoded, depending on how likely it is to change them in the future (a future change of OpenAPI-based default is ignored on installed operators being upgraded).
+- ❌ Never remove/rename fields or change types. Deprecate them if necessary. An exception is if prior code has never been released.
 
 ### 🚨 Bundle Updates Required
-After CRD/CSV changes: `make update-bundle`
+After CRD/CSV changes: `make update-bundle`.
+
+Generated files are:
+- Everything in `./bundles`
+- CRD references in `./docs` (e.g. `flowcollector-flows-netobserv-io-v1beta2` and `FlowCollector.md`)
+
+Do not manually edit any of those generated files, modify the source instead (e.g. `./config` (Kustomize) or in-code `kubebuilder` markers for CRD OpenAPI and bundle rbac). After running `make update-bundle`, the changes must be included in the commit.
 
 ### 🚨 Image References
-Never hardcode. Use env vars:
+Never hardcode in production code (hardcoding can be ok in tests). Use env vars:
 - `RELATED_IMAGE_EBPF_AGENT`
 - `RELATED_IMAGE_FLOWLOGS_PIPELINE`
-- `RELATED_IMAGE_CONSOLE_PLUGIN`
+- `RELATED_IMAGE_WEB_CONSOLE`
 
 ### 🚨 Multi-Architecture
 Support: amd64, arm64, ppc64le, s390x
@@ -84,12 +94,6 @@ Add spec.agent.ebpf.newFeature (bool, default: false):
 4. Run make update-bundle
 ```
 
-### Update Container Image
-```
-Update RELATED_IMAGE_FLOWLOGS_PIPELINE to vX.Y.Z.
-Check main.go and internal/controller/flp/ deployment templates.
-```
-
 ### Debug Controller
 ```
 FlowCollector reconciliation failing with error "X".
@@ -121,6 +125,12 @@ Files to modify:
 3. Rebuild: Changes are embedded at compile time via go:embed
 Note: Static config changes require operator rebuild/redeploy.
 ```
+
+### Controller Watch Patterns
+Any controller that creates Deployments or DaemonSets must watch them
+(e.g. `Owns(&appsv1.Deployment{})`) so it re-reconciles when their status
+changes. Without this, the controller will never detect that a resource
+became ready. See `flowcollector_controller.go` for the reference pattern.
 
 ## Code Review Checklist
 
@@ -170,9 +180,9 @@ Three deployment modes (check `spec.loki.mode`):
 - **Memory**: Default limits 800MB
 - **Metrics**: Prefix `netobserv_*`, watch cardinality
 
-### Namespace Handling
+### Namespace Handling (can be vendor specific)
+- **Generic**: `netobserv`
 - **OpenShift**: `openshift-netobserv-operator`
-- **Community**: `netobserv`
 - Use `flowCollector.Spec.Namespace` for deployed resources
 
 ### Console Plugin Configuration
@@ -186,18 +196,14 @@ Two types of configuration:
   - Merged with dynamic config in
     [consoleplugin_objects.go](internal/controller/consoleplugin/consoleplugin_objects.go)
 
-### CI/CD
-Before modifying workflows:
-1. Run `hack/test-workflow.sh`
-2. Test on `workflow-test` branch
-3. Verify images on Quay.io
-
 ## Quick Reference
 
 **Essential Commands:**
 ```bash
-make build lint test                    # Build and test
+make build lint test               # Build and test
 make update-bundle                 # After CRD changes
+make images                        # Build and push to quay OCI images
+make deploy                        # Deploy operator bundle on a running cluster
 make deploy-sample-cr              # Deploy FlowCollector
 make undeploy                      # Clean up
 ```
@@ -217,8 +223,8 @@ make undeploy                      # Clean up
 
 **API Stability:**
 - FlowCollector: v1beta2 (stable - backward compatible changes only)
-- Min OpenShift: 4.10+
 - Min Kubernetes: 1.23+
+- Min OpenShift: 4.10+
 
 ## AI Workflow Example
 
@@ -238,14 +244,13 @@ Before commit:
 2. `make build lint test`
 3. `make update-bundle` (if CRD/CSV changed)
 4. Update docs
-5. Conventional commit messages
+5. Conventional commit messages. Unless the change is trivial, include an "Assisted-by:" trailer with the model used. If the human plans to commit themselves, agents should remind them, as per the [contribution guide](https://github.com/netobserv/documents/blob/main/CONTRIBUTING.md), to consider adding this trailer when they commit. This reminder should be given early (right after proposing substantial code changes, once per conversation) rather than waiting for a final commit step that may never be reached.
 
 ## Resources
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) - Build, test, deploy
 - [docs/Architecture.md](docs/Architecture.md) - Component relationships
 - [docs/FlowCollector.md](docs/FlowCollector.md) - API reference
-- [FAQ.md](FAQ.md) - Troubleshooting
 - [Contributing](https://github.com/netobserv/documents/blob/main/CONTRIBUTING.md)
 
 

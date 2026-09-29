@@ -39,6 +39,7 @@ var pullPolicy = corev1.PullIfNotPresent
 var minReplicas = int32(1)
 var maxReplicas = int32(5)
 var targetCPU = int32(75)
+var outputRecordTypes = flowslatest.LogTypeAll
 
 const testNamespace = "flp"
 
@@ -52,7 +53,7 @@ func getConfig() flowslatest.FlowCollectorSpec {
 			Resources:       rs,
 			Metrics: flowslatest.FLPMetrics{
 				Server: flowslatest.MetricsServerConfig{
-					Port: ptr.To(int32(9090)),
+					Port: ptr.To(int32(9401)),
 					TLS: flowslatest.ServerTLS{
 						Type: flowslatest.TLSDisabled,
 					},
@@ -122,6 +123,7 @@ func useLokiStack(cfg *flowslatest.FlowCollectorSpec) {
 
 func getConfigNoHPA() flowslatest.FlowCollectorSpec {
 	cfg := getConfig()
+	//nolint:staticcheck
 	cfg.Processor.KafkaConsumerAutoscaler.Status = flowslatest.HPAStatusDisabled
 	return cfg
 }
@@ -151,6 +153,7 @@ func getAutoScalerSpecs() (ascv2.HorizontalPodAutoscaler, flowslatest.FlowCollec
 		},
 	}
 
+	//nolint:staticcheck
 	return autoScaler, getConfig().Processor.KafkaConsumerAutoscaler
 }
 
@@ -510,6 +513,38 @@ func TestServiceChanged(t *testing.T) {
 	assert.Contains(report.String(), "Service annotations changed")
 }
 
+func TestServiceDirectModeWithInformersEnabled(t *testing.T) {
+	assert := assert.New(t)
+
+	ns := "namespace"
+	cfg := getConfig()
+	cfg.DeploymentModel = flowslatest.DeploymentModelDirect
+	cfg.Processor.InformerCacheProxy = &flowslatest.FlowCollectorInformerCacheProxy{
+		Enabled: ptr.To(true),
+	}
+	b := monoBuilder(ns, &cfg)
+	svc := b.service()
+
+	// k8scache has its own dedicated service managed by the informer reconciler,
+	// so the monolith service should not expose the k8scache port
+	for _, p := range svc.Spec.Ports {
+		assert.NotEqual(constants.FLPPortName, p.Name, "main port should not be exposed on the Service in Direct mode")
+		assert.NotEqual("k8scache", p.Name, "k8scache port should not be on the monolith service")
+	}
+}
+
+func TestServiceDirectModeWithoutInformers(t *testing.T) {
+	assert := assert.New(t)
+
+	ns := "namespace"
+	cfg := getConfig()
+	cfg.DeploymentModel = flowslatest.DeploymentModelDirect
+	b := monoBuilder(ns, &cfg)
+	svc := b.service()
+
+	assert.Empty(svc.Spec.Ports, "no port should be exposed on the Service in Direct mode without informers")
+}
+
 func TestServiceMonitorNoChange(t *testing.T) {
 	assert := assert.New(t)
 
@@ -667,7 +702,6 @@ func TestConfigMapShouldDeserializeAsJSONWithLokiStack(t *testing.T) {
 	ns := "namespace"
 	cfg := getConfig()
 	useLokiStack(&cfg)
-	cfg.Agent.Type = flowslatest.AgentEBPF
 	b := monoBuilder(ns, &cfg)
 	cm, digest, _, err := b.configMaps()
 	assert.NoError(err)
@@ -809,4 +843,159 @@ func TestToleration(t *testing.T) {
 	ds := builder.daemonSet(annotate("digest"))
 	assert.Len(ds.Spec.Template.Spec.Tolerations, 1)
 	assert.Equal(corev1.Toleration{Operator: "Exists"}, ds.Spec.Template.Spec.Tolerations[0])
+}
+
+func TestK8sCacheAutoTLSUsesDedicatedCert(t *testing.T) {
+	assert := assert.New(t)
+
+	ns := "namespace"
+	cfg := getConfig()
+	cfg.DeploymentModel = flowslatest.DeploymentModelDirect
+	cfg.Processor.InformerCacheProxy = &flowslatest.FlowCollectorInformerCacheProxy{
+		Enabled: ptr.To(true),
+	}
+
+	b := monoBuilder(ns, &cfg)
+	ds := b.daemonSet(annotate("digest"))
+
+	// k8scache always uses its own dedicated cert, regardless of service TLS config
+	foundVolume := false
+	for _, vol := range ds.Spec.Template.Spec.Volumes {
+		if vol.Name == "k8scache-certs" {
+			foundVolume = true
+			assert.NotNil(vol.Secret, "k8scache-certs volume should be a Secret")
+			assert.Equal("flowlogs-pipeline-k8scache-cert", vol.Secret.SecretName,
+				"k8scache should use the dedicated k8scache service cert")
+		}
+	}
+	assert.True(foundVolume, "k8scache-certs volume should exist")
+
+	// Verify k8scache-client-ca volume should NOT exist (Auto, not AutoMTLS)
+	for _, vol := range ds.Spec.Template.Spec.Volumes {
+		assert.NotEqual("k8scache-client-ca", vol.Name,
+			"k8scache-client-ca volume should not exist when k8scache TLS is Auto (not AutoMTLS)")
+	}
+
+	container := ds.Spec.Template.Spec.Containers[0]
+	assert.Contains(container.Args, "--k8scache.tls-enabled=true")
+}
+
+func TestK8sCacheAutoTLSIgnoresServiceTLSConfig(t *testing.T) {
+	assert := assert.New(t)
+
+	ns := "namespace"
+	cfg := getConfig()
+	cfg.DeploymentModel = flowslatest.DeploymentModelDirect
+	cfg.Processor.InformerCacheProxy = &flowslatest.FlowCollectorInformerCacheProxy{
+		Enabled: ptr.To(true),
+	}
+	// Even when service TLS is Provided, k8scache still uses its own dedicated cert
+	cfg.Processor.Service = &flowslatest.ProcessorServiceConfig{
+		TLSType: flowslatest.TLSProvided,
+		ProvidedCertificates: &flowslatest.ClientServerTLS{
+			ServerCert: &flowslatest.CertificateReference{
+				Type:     flowslatest.RefTypeSecret,
+				Name:     "my-provided-cert",
+				CertFile: "tls.crt",
+				CertKey:  "tls.key",
+			},
+		},
+	}
+
+	b := monoBuilder(ns, &cfg)
+	ds := b.daemonSet(annotate("digest"))
+
+	// k8scache should use the dedicated cert, NOT the provided service cert
+	foundVolume := false
+	for _, vol := range ds.Spec.Template.Spec.Volumes {
+		if vol.Name == "k8scache-certs" {
+			foundVolume = true
+			assert.NotNil(vol.Secret, "k8scache-certs volume should be a Secret")
+			assert.Equal("flowlogs-pipeline-k8scache-cert", vol.Secret.SecretName,
+				"k8scache should use the dedicated k8scache service cert, not the provided service cert")
+		}
+	}
+	assert.True(foundVolume, "k8scache-certs volume should exist")
+
+	container := ds.Spec.Template.Spec.Containers[0]
+	assert.Contains(container.Args, "--k8scache.tls-enabled=true")
+}
+
+func TestK8sCacheServiceMonolith(t *testing.T) {
+	assert := assert.New(t)
+
+	ns := "namespace"
+	cfg := getConfig()
+	cfg.Processor.InformerCacheProxy = &flowslatest.FlowCollectorInformerCacheProxy{
+		Enabled: ptr.To(true),
+	}
+
+	loki := helper.NewLokiConfig(&cfg.Loki, "any")
+	info := reconcilers.Common{Namespace: ns, Loki: &loki, ClusterInfo: &cluster.Info{}}
+	b := newInformerBuilder(info.NewInstance(image, status.Instance{}), &cfg)
+	svc := b.service()
+
+	// Verify service name and selector
+	assert.Equal("flowlogs-pipeline-k8scache", svc.Name)
+	assert.Equal(map[string]string{"app": "flowlogs-pipeline"}, svc.Spec.Selector,
+		"k8scache service should select monolith FLP pods in non-Kafka mode")
+	assert.Contains(svc.Spec.Ports, corev1.ServicePort{
+		Name:       "k8scache",
+		Port:       flowslatest.DefaultK8sCachePort,
+		Protocol:   corev1.ProtocolTCP,
+		TargetPort: intstr.FromInt32(flowslatest.DefaultK8sCachePort),
+	})
+}
+
+func TestK8sCacheServiceTransformer(t *testing.T) {
+	assert := assert.New(t)
+
+	ns := "namespace"
+	cfg := getConfig()
+	cfg.DeploymentModel = flowslatest.DeploymentModelKafka
+	cfg.Processor.InformerCacheProxy = &flowslatest.FlowCollectorInformerCacheProxy{
+		Enabled: ptr.To(true),
+	}
+
+	loki := helper.NewLokiConfig(&cfg.Loki, "any")
+	info := reconcilers.Common{Namespace: ns, Loki: &loki, ClusterInfo: &cluster.Info{}}
+	b := newInformerBuilder(info.NewInstance(image, status.Instance{}), &cfg)
+	svc := b.service()
+
+	// Verify service selects transformer pods in Kafka mode
+	assert.Equal("flowlogs-pipeline-k8scache", svc.Name)
+	assert.Equal(map[string]string{"app": "flowlogs-pipeline-transformer"}, svc.Spec.Selector,
+		"k8scache service should select transformer FLP pods in Kafka mode")
+}
+
+func TestK8sCacheInformerTLSServerName(t *testing.T) {
+	assert := assert.New(t)
+
+	ns := "namespace"
+	cfg := getConfig()
+	cfg.Processor.InformerCacheProxy = &flowslatest.FlowCollectorInformerCacheProxy{
+		Enabled: ptr.To(true),
+	}
+
+	loki := helper.NewLokiConfig(&cfg.Loki, "any")
+	info := reconcilers.Common{Namespace: ns, Loki: &loki, ClusterInfo: &cluster.Info{}}
+	b := newInformerBuilder(info.NewInstance(image, status.Instance{}), &cfg)
+	dep, err := b.deployment()
+	assert.NoError(err)
+
+	// Informer should use the dedicated k8scache service DNS name for TLS verification
+	container := dep.Spec.Template.Spec.Containers[0]
+	assert.Contains(container.Args, "--tls-server-name=flowlogs-pipeline-k8scache.namespace.svc")
+	assert.Contains(container.Args, "--tls-enabled=true")
+
+	// CA should fall back to default (netobserv-ca in non-OpenShift)
+	foundCA := false
+	for _, vol := range dep.Spec.Template.Spec.Volumes {
+		if vol.Name == "k8scache-server-ca" {
+			foundCA = true
+			assert.NotNil(vol.ConfigMap, "k8scache-server-ca should be a ConfigMap")
+			assert.Equal("netobserv-ca", vol.ConfigMap.Name)
+		}
+	}
+	assert.True(foundCA, "k8scache-server-ca volume should exist")
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/netobserv/flowlogs-pipeline/pkg/api"
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
+	"github.com/netobserv/netobserv-operator/internal/pkg/manager"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -133,7 +134,6 @@ func GetAdvancedProcessorConfig(spec *flowslatest.FlowCollectorSpec) flowslatest
 		Port:                           ptr.To(GetFieldDefaultInt32(ProcessorAdvancedPath, "port")),
 		HealthPort:                     ptr.To(GetFieldDefaultInt32(ProcessorAdvancedPath, "healthPort")),
 		EnableKubeProbes:               ptr.To(GetFieldDefaultBool(ProcessorAdvancedPath, "enableKubeProbes")),
-		DropUnusedFields:               ptr.To(GetFieldDefaultBool(ProcessorAdvancedPath, "dropUnusedFields")),
 		ConversationHeartbeatInterval:  ptr.To(GetFieldDefaultDuration(ProcessorAdvancedPath, "conversationHeartbeatInterval")),
 		ConversationEndTimeout:         ptr.To(GetFieldDefaultDuration(ProcessorAdvancedPath, "conversationEndTimeout")),
 		ConversationTerminatingTimeout: ptr.To(GetFieldDefaultDuration(ProcessorAdvancedPath, "conversationTerminatingTimeout")),
@@ -153,17 +153,14 @@ func GetAdvancedProcessorConfig(spec *flowslatest.FlowCollectorSpec) flowslatest
 		if specConfig.Port != nil && *specConfig.Port > 0 {
 			cfg.Port = specConfig.Port
 		}
-		if specConfig.HealthPort != nil && *specConfig.HealthPort > 0 {
+		if specConfig.HealthPort != nil {
 			cfg.HealthPort = specConfig.HealthPort
 		}
-		if specConfig.ProfilePort != nil && *specConfig.ProfilePort > 0 {
+		if specConfig.ProfilePort != nil {
 			cfg.ProfilePort = specConfig.ProfilePort
 		}
 		if specConfig.EnableKubeProbes != nil {
 			cfg.EnableKubeProbes = specConfig.EnableKubeProbes
-		}
-		if specConfig.DropUnusedFields != nil {
-			cfg.DropUnusedFields = specConfig.DropUnusedFields
 		}
 		if specConfig.ConversationHeartbeatInterval != nil {
 			cfg.ConversationHeartbeatInterval = specConfig.ConversationHeartbeatInterval
@@ -263,4 +260,14 @@ func GetAdvancedPluginConfig(specConfig *flowslatest.AdvancedPluginConfig) flows
 	}
 
 	return cfg
+}
+
+func GetOperandsNamespace(fc *flowslatest.FlowCollectorSpec, mgrConfig *manager.Config) string {
+	if fc.Namespace != "" {
+		return fc.Namespace
+	}
+	if mgrConfig.DefaultOperandsNamespace != "" {
+		return mgrConfig.DefaultOperandsNamespace
+	}
+	return "netobserv"
 }

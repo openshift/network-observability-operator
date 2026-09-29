@@ -35,7 +35,6 @@ type LokiConfig struct {
 	StatusCAPath       string       `yaml:"statusCaPath,omitempty" json:"statusCaPath,omitempty"`
 	StatusUserCertPath string       `yaml:"statusUserCertPath,omitempty" json:"statusUserCertPath,omitempty"`
 	StatusUserKeyPath  string       `yaml:"statusUserKeyPath,omitempty" json:"statusUserKeyPath,omitempty"`
-	UseMocks           bool         `yaml:"useMocks,omitempty" json:"useMocks,omitempty"`
 	ForwardUserToken   bool         `yaml:"forwardUserToken,omitempty" json:"forwardUserToken,omitempty"`
 }
 
@@ -64,6 +63,11 @@ type MetricInfo struct {
 	ValueField string   `yaml:"valueField,omitempty" json:"valueField,omitempty"`
 	Direction  string   `yaml:"direction,omitempty" json:"direction,omitempty"`
 	Labels     []string `yaml:"labels,omitempty" json:"labels,omitempty"`
+}
+
+type K8SConfig struct {
+	TokenPath        string `yaml:"tokenPath,omitempty" json:"tokenPath,omitempty"`
+	ForwardUserToken bool   `yaml:"forwardUserToken" json:"forwardUserToken"` // do not omit empty, so "false" can override the default "true" in plugin
 }
 
 type ColumnConfig struct {
@@ -117,6 +121,12 @@ type FieldConfig struct {
 	LokiLabel   bool   `yaml:"lokiLabel,omitempty" json:"lokiLabel,omitempty"`
 }
 
+type HealthTemplate struct {
+	Name         flowslatest.HealthRuleTemplate `yaml:"name" json:"name"`
+	RunbookURL   string                         `yaml:"runbookURL" json:"runbookURL"`
+	IsConfigured bool                           `yaml:"isConfigured" json:"isConfigured"`
+}
+
 type FrontendConfig struct {
 	RecordTypes          []api.ConnTrackOutputRecordTypeEnum `yaml:"recordTypes" json:"recordTypes"`
 	PortNaming           flowslatest.ConsolePluginPortConfig `yaml:"portNaming,omitempty" json:"portNaming,omitempty"`
@@ -129,13 +139,24 @@ type FrontendConfig struct {
 	Features             []string                            `yaml:"features" json:"features"`
 	Fields               []FieldConfig                       `yaml:"fields" json:"fields"`
 	RecordingAnnotations map[string]map[string]string        `yaml:"recordingAnnotations,omitempty" json:"recordingAnnotations,omitempty"`
+	HealthTemplates      []HealthTemplate                    `yaml:"healthTemplates,omitempty" json:"healthTemplates,omitempty"`
 }
 
+type ConsoleMode string
+
+const (
+	Standalone      ConsoleMode = "Standalone"
+	OpenShiftPlugin ConsoleMode = "OpenShiftPlugin"
+	Mock            ConsoleMode = "Mock"
+)
+
 type PluginConfig struct {
-	Server     ServerConfig     `yaml:"server" json:"server"`
-	Loki       LokiConfig       `yaml:"loki" json:"loki"`
-	Prometheus PrometheusConfig `yaml:"prometheus" json:"prometheus"`
-	Frontend   FrontendConfig   `yaml:"frontend" json:"frontend"`
+	ConsoleMode ConsoleMode      `yaml:"consoleMode" json:"consoleMode"`
+	Server      ServerConfig     `yaml:"server" json:"server"`
+	Loki        LokiConfig       `yaml:"loki" json:"loki"`
+	Prometheus  PrometheusConfig `yaml:"prometheus" json:"prometheus"`
+	Kubernetes  K8SConfig        `yaml:"kubernetes" json:"kubernetes"`
+	Frontend    FrontendConfig   `yaml:"frontend" json:"frontend"`
 }
 
 //go:embed static-frontend-config.yaml

@@ -24,34 +24,29 @@ spec:
         - --health-probe-bind-address=:8081
         - --metrics-bind-address=:8443
         - --leader-elect
-        - --ebpf-agent-image=$(RELATED_IMAGE_EBPF_AGENT)
-        - --flowlogs-pipeline-image=$(RELATED_IMAGE_FLOWLOGS_PIPELINE)
-        - --console-plugin-images=default=$(RELATED_IMAGE_CONSOLE_PLUGIN_PF4);4.15.0=$(RELATED_IMAGE_CONSOLE_PLUGIN_PF5);4.22.0=$(RELATED_IMAGE_CONSOLE_PLUGIN)
-        - --demo-loki-image=$(RELATED_IMAGE_DEMO_LOKI)
-        - --namespace=$(NAMESPACE)
-        - --downstream-deployment=$(DOWNSTREAM_DEPLOYMENT)
-        - --profiling-bind-address=$(PROFILING_BIND_ADDRESS)
         env:
           - name: RELATED_IMAGE_EBPF_AGENT
-            value: quay.io/netobserv/netobserv-ebpf-agent:v1.11.4-community
+            value: quay.io/netobserv/netobserv-ebpf-agent:v2.0.0-community
           - name: RELATED_IMAGE_FLOWLOGS_PIPELINE
-            value: quay.io/netobserv/flowlogs-pipeline:v1.11.4-community
-          - name: RELATED_IMAGE_CONSOLE_PLUGIN
-            value: quay.io/netobserv/network-observability-console-plugin:v1.11.4-community
-          - name: RELATED_IMAGE_CONSOLE_PLUGIN_PF4
-            value: quay.io/netobserv/network-observability-console-plugin:v1.11.4-community-pf4
-          - name: RELATED_IMAGE_CONSOLE_PLUGIN_PF5
-            value: quay.io/netobserv/network-observability-console-plugin:v1.11.4-community-pf5
+            value: quay.io/netobserv/flowlogs-pipeline:v2.0.0-community
+          - name: RELATED_IMAGE_WEB_CONSOLE
+            value: quay.io/netobserv/network-observability-console-plugin:v2.0.0-community
           - name: RELATED_IMAGE_DEMO_LOKI
             value: grafana/loki:3.5.0
-          - name: DOWNSTREAM_DEPLOYMENT
-            value: "false"
-          - name: PROFILING_BIND_ADDRESS
+          - name: STATIC_PLUGIN_CPU_REQUEST
+            value: "10m"
+          - name: STATIC_PLUGIN_MEMORY_REQUEST
+            value: "64Mi"
+          - name: STATIC_PLUGIN_CPU_LIMIT
+            value: ""
+          - name: STATIC_PLUGIN_MEMORY_LIMIT
             value: ""
           - name: NAMESPACE
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
+          - name: OPERATOR_NETWORK_POLICY
+            value: 'true'
         image: controller:latest
         name: manager
         imagePullPolicy: Always
@@ -61,6 +56,18 @@ spec:
             drop:
               - ALL
           readOnlyRootFilesystem: true
+        # Suspends the liveness/readiness probes until /healthz first responds. Startup API
+        # discovery may block for several minutes while the control-plane rolls out after an
+        # APIServer TLS security profile change (see startupAPIDiscoveryBackoff in
+        # internal/pkg/cluster/cluster.go); without this the liveness probe would kill the
+        # container before the health server comes up. Budget (30 x 10s = 5 min) must stay
+        # >= the startup discovery retry window.
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          periodSeconds: 10
+          failureThreshold: 30
         livenessProbe:
           httpGet:
             path: /healthz
@@ -79,5 +86,6 @@ spec:
           requests:
             cpu: 100m
             memory: 100Mi
+        terminationMessagePolicy: FallbackToLogsOnError
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

@@ -155,6 +155,7 @@ func TestMergeMetricsConfiguration_DefaultWithFeatures(t *testing.T) {
 	cfs, _ := validatePipelineConfig(t, scm, dcm)
 	names := getSortedMetricsNames(cfs.Parameters[5].Encode.Prom.Metrics)
 	assert.Equal([]string{
+		"namespace_dns_flows_total",
 		"namespace_dns_latency_seconds",
 		"namespace_drop_packets_total",
 		"namespace_flows_total",
@@ -411,7 +412,7 @@ func TestPipelineWithSubnetLabels(t *testing.T) {
 	cfg := flowslatest.FlowCollectorSpec{
 		Processor: flowslatest.FlowCollectorFLP{
 			SubnetLabels: flowslatest.SubnetLabels{
-				OpenShiftAutoDetect: ptr.To(true),
+				AutoDetect: ptr.To(true),
 				CustomLabels: []flowslatest.SubnetLabel{
 					{
 						Name:  "Foo",

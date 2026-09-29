@@ -1,3 +1,4 @@
+# Auto-generated from helm-update.sh
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -34,3 +35,11 @@ rules:
     verbs:
       - create
       - patch
+  - apiGroups:
+      - operators.coreos.com
+    resources:
+      - subscriptions
+    verbs:
+      - get
+      - list
+      - watch

@@ -2,11 +2,14 @@ package reconcilers
 
 import (
 	"context"
+	"crypto/tls"
 
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
 	"github.com/netobserv/netobserv-operator/internal/pkg/cluster"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
+	"github.com/netobserv/netobserv-operator/internal/pkg/manager/enqueuer"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 	"github.com/netobserv/netobserv-operator/internal/pkg/watchers"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -14,11 +17,13 @@ import (
 
 type Common struct {
 	helper.Client
-	Watcher      *watchers.Watcher
-	Namespace    string
-	ClusterInfo  *cluster.Info
-	Loki         *helper.LokiConfig
-	IsDownstream bool
+	Enqueuer    enqueuer.Static
+	Watcher     *watchers.Watcher
+	Namespace   string
+	ClusterInfo *cluster.Info
+	Loki        *helper.LokiConfig
+	Vendor      constants.Vendor
+	TLSConfig   *tls.Config
 }
 
 func (c *Common) PrivilegedNamespace() string {
@@ -49,8 +54,8 @@ func (c *Common) NewInstance(images map[ImageRef]string, st status.Instance) *In
 	}
 }
 
-func (c *Common) ReconcileClusterRoleBinding(ctx context.Context, desired *rbacv1.ClusterRoleBinding) error {
-	return ReconcileClusterRoleBinding(ctx, &c.Client, desired)
+func (c *Common) ReconcileClusterRoleBinding(ctx context.Context, namespace, sa string, ref roles.ClusterRoleName, isDelete bool) error {
+	return ReconcileClusterRoleBinding(ctx, c.Enqueuer, &c.Client, namespace, sa, ref, isDelete)
 }
 
 func (c *Common) ReconcileRoleBinding(ctx context.Context, desired *rbacv1.RoleBinding) error {

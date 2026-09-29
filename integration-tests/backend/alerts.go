@@ -4,41 +4,98 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
-	exutil "github.com/openshift/origin/test/extended/util"
-	compat_otp "github.com/openshift/origin/test/extended/util/compat_otp"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-func getConfiguredAlertRules(oc *exutil.CLI, ruleName string, namespace string) (string, error) {
-	return oc.AsAdmin().WithoutNamespace().Run("get").Args("prometheusrules", ruleName, "-o=jsonpath='{.spec.groups[*].rules[*].alert}'", "-n", namespace).Output()
+// prometheusAlertResult the response of querying prometheus ALERTS metric
+type prometheusAlertResult struct {
+	Data struct {
+		Result []struct {
+			Metric map[string]string `json:"metric"`
+		} `json:"result"`
+	} `json:"data"`
 }
 
-func getAlertStatus(oc *exutil.CLI, alertName string) (map[string]interface{}, error) {
-	alertOut, err := oc.AsAdmin().WithoutNamespace().Run("exec").Args("-n", "openshift-monitoring", "alertmanager-main-0", "--", "amtool", "--alertmanager.url", "http://localhost:9093", "alert", "query", alertName, "-o", "json").Output()
+func getConfiguredAlertRules(ruleName string, namespace string) (string, error) {
+	obj, err := getDynamicResource("prometheusRule", ruleName, namespace)
 	if err != nil {
-		return make(map[string]interface{}), err
+		return "", err
 	}
-	var alertStatus []interface{}
-	_ = json.Unmarshal([]byte(alertOut), &alertStatus)
 
-	if len(alertStatus) == 0 {
-		return make(map[string]interface{}), nil
+	groups, found, _ := unstructured.NestedSlice(obj.Object, "spec", "groups")
+	if !found {
+		return "", fmt.Errorf("no spec.groups found in prometheusrule %s", ruleName)
 	}
-	return alertStatus[0].(map[string]interface{}), nil
+
+	var alertNames []string
+	for _, g := range groups {
+		group, ok := g.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		rules, _, _ := unstructured.NestedSlice(group, "rules")
+		for _, r := range rules {
+			rule, ok := r.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if alert, ok := rule["alert"].(string); ok {
+				alertNames = append(alertNames, alert)
+			}
+		}
+	}
+	return strings.Join(alertNames, " "), nil
 }
 
-func waitForAlertToBeActive(oc *exutil.CLI, alertName string) {
-	err := wait.PollUntilContextTimeout(context.Background(), 10*time.Second, 900*time.Second, false, func(context.Context) (done bool, err error) {
-		alertStatus, err := getAlertStatus(oc, alertName)
-		if err != nil {
-			return false, err
-		}
-		if len(alertStatus) == 0 {
+func getAlertLabels(alertName string) (map[string]string, error) {
+	bearerToken := getSAToken("prometheus-k8s", "openshift-monitoring")
+	promRoute := "https://" + getRouteAddress("openshift-monitoring", "prometheus-k8s")
+	query := fmt.Sprintf(`ALERTS{alertname="%s"}`, alertName)
+
+	h := make(http.Header)
+	h.Add("Content-Type", "application/json")
+	h.Add("Authorization", "Bearer "+bearerToken)
+
+	params := url.Values{}
+	params.Add("query", query)
+
+	resp, err := doHTTPRequest(h, promRoute, "/api/v1/query", params.Encode(), "GET", false, 5, nil, 200)
+	if err != nil {
+		return nil, err
+	}
+
+	var result prometheusAlertResult
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal alert result: %w", err)
+	}
+
+	if len(result.Data.Result) == 0 {
+		return nil, nil
+	}
+
+	return result.Data.Result[0].Metric, nil
+}
+
+func waitForAlertToBePending(alertName string) {
+	bearerToken := getSAToken("prometheus-k8s", "openshift-monitoring")
+	promRoute := "https://" + getRouteAddress("openshift-monitoring", "prometheus-k8s")
+	query := fmt.Sprintf(`ALERTS{alertname="%s"}`, alertName)
+
+	err := wait.PollUntilContextTimeout(context.Background(), 10*time.Second, 300*time.Second, false, func(context.Context) (done bool, err error) {
+		res, qErr := queryPrometheus(promRoute, query, bearerToken)
+		if qErr != nil {
 			return false, nil
 		}
-		return alertStatus["status"].(map[string]interface{})["state"] == "active", nil
+		if len(res.Data.Result) == 0 {
+			return false, nil
+		}
+		return true, nil
 	})
-	compat_otp.AssertWaitPollNoErr(err, fmt.Sprintf("%s Alert did not become active", alertName))
+	assertWaitPollNoErr(err, fmt.Sprintf("%s Alert did not become pending", alertName))
 }

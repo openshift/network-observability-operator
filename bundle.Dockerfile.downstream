@@ -29,9 +29,9 @@ LABEL operators.operatorframework.io.test.mediatype.v1=scorecard+v1
 LABEL operators.operatorframework.io.test.config.v1=tests/scorecard/
 
 # Copy files to locations specified by labels.
-COPY --from=builder /opt/app-root/src/bundle/manifests /manifests/
-COPY --from=builder /opt/app-root/src/bundle/metadata /metadata/
-COPY --from=builder /opt/app-root/src/bundle/tests/scorecard /tests/scorecard/
+COPY --from=builder /opt/app-root/src/bundles/openshift/manifests /manifests/
+COPY --from=builder /opt/app-root/src/bundles/openshift/metadata /metadata/
+COPY --from=builder /opt/app-root/src/bundles/openshift/tests/scorecard /tests/scorecard/
 
 LABEL com.redhat.component="network-observability-operator-bundle-container"
 LABEL cpe="cpe:/a:redhat:network_observ_optr:$BUILDVERSION_Y::el9"

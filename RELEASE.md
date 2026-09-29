@@ -1,5 +1,15 @@
 ## Releasing process
 
+### Testing current "main"
+
+Start a Kind cluster (`kind create cluster`), then:
+
+```bash
+USER=netobserv make helm-install
+make helm-configure-flowcollector
+make helm-expose-console
+```
+
 ### Draft release - related components
 
 All components deployed by this operator can be released separatly, at their own pace.
@@ -9,7 +19,7 @@ To release them, a tag in the format "v1.6.0-community" or "v1.6.0-crc0" must be
 E.g:
 
 ```bash
-version="v1.11.4-community"
+version="v2.0.0-community"
 git tag -a "$version" -m "$version"
 git push upstream --tags
 ```
@@ -18,13 +28,17 @@ The release script should be triggered (check github actions). It will automatic
 
 ### Draft release - operator
 
-We can then proceed with the operator. Edit the [Makefile](./Makefile) to update `BUNDLE_VERSION`.
+We can then proceed with the operator.
+
+Edit the [Makefile](./Makefile) to update the default `BUNDLE_VERSION`.
+
+Then:
 
 ```bash
 BUNDLE_SET_DATE=true make update-bundle
 
 # Set desired operator version - CAREFUL, no leading "v" here
-version="1.11.4-community"
+version="2.0.0-community"
 vv=v$version
 test_branch=test-$vv
 
@@ -33,6 +47,8 @@ git commit -a -m "Prepare release $vv"
 git push upstream HEAD:$test_branch
 git tag -a "$version" -m "$version"
 git push upstream --tags
+
+VERSION=$version PIN_DIGEST=true make helm-update
 ```
 
 The release script should be triggered ([check github actions](https://github.com/netobserv/netobserv-operator/actions)).
@@ -52,46 +68,14 @@ cd helm && helm dependency update --skip-refresh ; cd ..
 When all component drafts are ready, you can test the helm chart on your cluster:
 
 ```bash
-helm repo add cert-manager https://charts.jetstack.io
-helm install cert-manager -n cert-manager --create-namespace cert-manager/cert-manager --set crds.enabled=true
-helm upgrade trust-manager oci://quay.io/jetstack/charts/trust-manager --install --namespace cert-manager --wait
+make helm-install-release
+make helm-configure-flowcollector
 
-helm install netobserv -n netobserv --create-namespace --set install.loki=true --set install.prom-stack=true ./helm
-
-cat <<EOF | kubectl apply -f -
-apiVersion: flows.netobserv.io/v1beta2
-kind: FlowCollector
-metadata:
-  name: cluster
-spec:
-  networkPolicy:
-    enable: false
-  consolePlugin:
-    standalone: true
-  processor:
-    consumerReplicas: 1
-    service:
-      tlsType: Auto-mTLS
-  loki:
-    mode: Monolithic
-    monolithic:
-      url: 'http://netobserv-loki.netobserv.svc.cluster.local.:3100/'
-  prometheus:
-    querier:
-      mode: Manual
-      manual:
-        url: http://netobserv-prom-stack-prometheus.netobserv.svc.cluster.local.:9090/
-        alertManager:
-          url: http://netobserv-prom-stack-alertmanager.netobserv.svc.cluster.local.:9093/
-EOF
-
-# Check components image:
-kubectl config set-context --current --namespace=netobserv
+# Check component images:
 kubectl get pods -oyaml | grep image:
 kubectl get pods -n netobserv-privileged -oyaml | grep image:
 
-kubectl wait -n netobserv --timeout=60s --for condition=Available=True deployment netobserv-plugin
-kubectl port-forward svc/netobserv-plugin 9001:9001 -n netobserv
+make helm-expose-console
 ```
 
 Then open http://localhost:9001/ in your browser, and do some manual smoke tests.
@@ -99,7 +83,7 @@ Then open http://localhost:9001/ in your browser, and do some manual smoke tests
 To clean up:
 
 ```bash
-helm delete netobserv -n netobserv
+make helm-cleanup
 ```
 
 ### Commit operator changes
@@ -157,15 +141,15 @@ From the operator repository:
 ```bash
 helm package helm/
 index_path=/path/to/netobserv.github.io/static/helm
-mkdir -p $index_path/new && mv netobserv-operator-1.11.4.tgz $index_path/new && cd $index_path
+mkdir -p $index_path/new && mv netobserv-operator-2.0.0.tgz $index_path/new && cd $index_path
 helm repo index --merge index.yaml new/ --url https://netobserv.io/static/helm/
 mv new/* . && rmdir new
 
 # Now, check there's nothing wrong in the generated files before commit (comparing last 2 versions)
 colordiff <(yq '.entries.netobserv-operator[1]' index.yaml) <(yq '.entries.netobserv-operator[0]' index.yaml)
 
-git add netobserv-operator-1.11.4.tgz index.yaml
-git commit -m "Publish helm 1.11.4-community"
+git add netobserv-operator-2.0.0.tgz index.yaml
+git commit -s -m "Publish helm 2.0.0-community"
 git push upstream HEAD:main
 ```
 

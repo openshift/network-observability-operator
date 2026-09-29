@@ -1,0 +1,131 @@
+//nolint:revive,staticcheck
+package envtest
+
+import (
+	"context"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
+	. "github.com/netobserv/netobserv-operator/internal/controller/envtest"
+	"github.com/netobserv/netobserv-operator/internal/pkg/test"
+)
+
+const (
+	timeout  = test.Timeout
+	interval = test.Interval
+)
+
+// nolint:cyclop
+func ControllerSpecs(env test.Environment, ctxGetter test.ContextGetter) {
+	var ctx context.Context
+	var k8sClient client.Client
+	BeforeEach(func() {
+		ctx, k8sClient = ctxGetter()
+	})
+
+	const operatorNamespace = "main-namespace"
+	crKey := types.NamespacedName{
+		Name: "cluster",
+	}
+	npKey1 := types.NamespacedName{
+		Name:      "netobserv",
+		Namespace: operatorNamespace,
+	}
+
+	// Created objects to cleanup
+	cleanupList := []client.Object{}
+
+	Context("Without FlowCollector", func() {
+		list := networkingv1.NetworkPolicyList{}
+		expected := []string{"netobserv-operator"}
+		if env == test.EnvOpenShift {
+			expected = append(expected, "netobserv-plugin-static")
+		}
+		It("Should have installed operator policies", func() {
+			Eventually(func() []string {
+				err := k8sClient.List(ctx, &list)
+				Expect(err).NotTo(HaveOccurred())
+				var names []string
+				for i := range list.Items {
+					names = append(names, list.Items[i].Name)
+				}
+				return names
+			}, timeout, interval).Should(ConsistOf(expected))
+		})
+	})
+
+	Context("Deploying FlowCollector", func() {
+		It("Should create successfully", func() {
+			created := &flowslatest.FlowCollector{
+				ObjectMeta: metav1.ObjectMeta{Name: crKey.Name},
+				Spec: flowslatest.FlowCollectorSpec{
+					Namespace:       operatorNamespace,
+					DeploymentModel: flowslatest.DeploymentModelDirect,
+					NetworkPolicy: flowslatest.NetworkPolicy{
+						Enable: ptr.To(true),
+					},
+				},
+			}
+
+			// Create
+			Expect(k8sClient.Create(ctx, created)).Should(Succeed())
+
+			By("Expecting to create the netobserv NetworkPolicy")
+			list := networkingv1.NetworkPolicyList{}
+			expected := []types.NamespacedName{
+				{Namespace: "main-namespace", Name: "netobserv-operator"},
+				{Namespace: "main-namespace", Name: "netobserv"},
+				{Namespace: "main-namespace-privileged", Name: "netobserv"},
+			}
+			if env == test.EnvOpenShift {
+				expected = append(expected, types.NamespacedName{Namespace: "main-namespace", Name: "netobserv-plugin-static"})
+			}
+			Eventually(func() []types.NamespacedName {
+				err := k8sClient.List(ctx, &list)
+				Expect(err).NotTo(HaveOccurred())
+				var nsnames []types.NamespacedName
+				for i := range list.Items {
+					nsnames = append(nsnames, client.ObjectKeyFromObject(&list.Items[i]))
+				}
+				return nsnames
+			}, timeout, interval).Should(ConsistOf(expected))
+		})
+	})
+
+	Context("Checking CR ownership", func() {
+		It("Should be garbage collected", func() {
+			// Retrieve CR to get its UID
+			By("Getting the CR")
+			flowCR := test.GetCR(ctx, k8sClient, crKey)
+
+			By("Expecting flowlogs-pipeline daemonset to be garbage collected")
+			Eventually(func() interface{} {
+				np := networkingv1.NetworkPolicy{}
+				_ = k8sClient.Get(ctx, npKey1, &np)
+				return &np
+			}, timeout, interval).Should(BeGarbageCollectedBy(flowCR))
+		})
+	})
+
+	Context("Cleanup", func() {
+		It("Should delete CR", func() {
+			test.CleanupCR(ctx, k8sClient, crKey)
+		})
+
+		It("Should cleanup other data", func() {
+			for _, obj := range cleanupList {
+				Eventually(func() error {
+					return k8sClient.Delete(ctx, obj)
+				}, timeout, interval).Should(Succeed())
+			}
+		})
+	})
+
+}

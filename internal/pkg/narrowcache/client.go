@@ -2,11 +2,12 @@ package narrowcache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
 
-	"k8s.io/apimachinery/pkg/api/errors"
+	kerr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -23,10 +25,11 @@ import (
 
 type Client struct {
 	client.Client
-	liveClient     kubernetes.Interface
-	watchedGVKs    map[string]GVKInfo        // read only once init
-	watchedObjects map[string]*watchedObject // mutex'ed
-	wmut           sync.RWMutex              // for watchedObjects map
+	liveClient        kubernetes.Interface
+	watchedGVKs       map[string]GVKInfo        // read only once init
+	watchedObjects    map[string]*watchedObject // mutex'ed
+	wmut              sync.RWMutex              // for watchedObjects map
+	idempotentSources idempotentSources         // idempotentSources stores registered sources for idempotent enqueue requests
 }
 
 type watchedObject struct {
@@ -67,40 +70,45 @@ func (c *Client) getAndCreateWatchIfNeeded(ctx context.Context, info GVKInfo, gv
 
 	c.wmut.RLock()
 	ca := c.watchedObjects[objKey]
-	c.wmut.RUnlock()
 	if ca != nil {
+		defer c.wmut.RUnlock()
 		if ca.cached == nil {
-			return nil, objKey, errors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: gvk.Kind}, key.Name)
+			return nil, objKey, kerr.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: gvk.Kind}, key.Name)
 		}
 		// Return from cache
 		return ca.cached, objKey, nil
 	}
+	c.wmut.RUnlock()
 
 	// Live query
 	rlog := log.FromContext(ctx).WithName("narrowcache").WithValues("objKey", objKey)
-	rlog.Info("Cache miss, doing live query")
-	fetched, err := info.Getter(ctx, c.liveClient, key)
-	if err != nil {
-		return nil, objKey, err
-	}
-
-	// Create watch for later calls
-	w, err := info.Watcher(ctx, c.liveClient, key)
-	if err != nil {
-		return nil, objKey, err
-	}
-
-	// Store fetched object
-	obj := info.Cleanup(fetched)
-	err = c.setToCache(objKey, obj)
+	rlog.V(1).Info("Cache miss, doing live query")
+	fetched, w, err := c.fetchAndWatch(ctx, objKey, info, key)
 	if err != nil {
 		return nil, objKey, err
 	}
 
 	// Start updating goroutine
-	go c.updateCache(ctx, objKey, w)
+	go c.updateCache(ctx, objKey, info, key, w)
 
-	return fetched.(client.Object), objKey, nil
+	return fetched, objKey, nil
+}
+
+func (c *Client) fetchAndWatch(ctx context.Context, cacheKey string, info GVKInfo, objKey client.ObjectKey) (client.Object, watch.Interface, error) {
+	fetched, err := info.Getter(ctx, c.liveClient, objKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	w, err := info.Watcher(ctx, c.liveClient, objKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	info.Cleanup(fetched)
+	if err := c.setToCache(cacheKey, fetched); err != nil {
+		w.Stop()
+		return nil, nil, err
+	}
+	return fetched.(client.Object), w, nil
 }
 
 // "Terrible hack" cc directxman12 / sigs.k8s.io/controller-runtime/pkg/cache/internal/cache_reader.go
@@ -119,22 +127,48 @@ func copyInto(obj runtime.Object, out client.Object) error {
 	return nil
 }
 
-func (c *Client) updateCache(ctx context.Context, key string, watcher watch.Interface) {
+func (c *Client) updateCache(ctx context.Context, cacheKey string, info GVKInfo, objKey client.ObjectKey, watcher watch.Interface) {
 	rlog := log.FromContext(ctx).WithName("narrowcache")
-	for watchEvent := range watcher.ResultChan() {
-		rlog.WithValues("key", key, "event type", watchEvent.Type).Info("Event received")
-		if watchEvent.Type == watch.Added || watchEvent.Type == watch.Modified {
-			err := c.setToCache(key, watchEvent.Object)
-			if err != nil {
-				rlog.WithValues("key", key).Error(err, "Error while updating cache")
+	defer func() {
+		watcher.Stop()
+		rlog.V(1).WithValues("key", cacheKey).Info("Watch terminated. Clearing cache entry.")
+		c.clearEntryByKey(cacheKey)
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case watchEvent, ok := <-watcher.ResultChan():
+			if !ok {
+				// Watch channel closed (normal API timeout). Re-establish the watch
+				// to avoid losing handlers and missing subsequent events.
+				rlog.V(1).WithValues("key", cacheKey).Info("Watch channel closed, re-establishing")
+				watcher.Stop()
+
+				obj, newWatcher, err := c.fetchAndWatch(ctx, cacheKey, info, objKey)
+				if err != nil {
+					rlog.WithValues("key", cacheKey).Error(err, "Failed to re-establish watch")
+					return
+				}
+
+				// Notify handlers so controllers re-check current state
+				c.callHandlers(ctx, cacheKey, watch.Event{Type: watch.Modified, Object: obj})
+
+				watcher = newWatcher
+				continue
 			}
-		} else if watchEvent.Type == watch.Deleted {
-			c.removeFromCache(key)
+			rlog.V(1).WithValues("key", cacheKey, "event type", watchEvent.Type).Info("Event received")
+			if watchEvent.Type == watch.Added || watchEvent.Type == watch.Modified {
+				if err := c.setToCache(cacheKey, watchEvent.Object); err != nil {
+					rlog.WithValues("key", cacheKey).Error(err, "Error while updating cache")
+				}
+			} else if watchEvent.Type == watch.Deleted {
+				c.removeFromCache(cacheKey)
+			}
+			c.callHandlers(ctx, cacheKey, watchEvent)
 		}
-		c.callHandlers(ctx, key, watchEvent)
 	}
-	rlog.WithValues("key", key).Info("Watch terminated. Clearing cache entry.")
-	c.clearEntryByKey(key)
 }
 
 func (c *Client) setToCache(key string, obj runtime.Object) error {
@@ -161,15 +195,24 @@ func (c *Client) removeFromCache(key string) {
 	}
 }
 
-func (c *Client) addHandler(key string, hoq handlerOnQueue) {
+func (c *Client) addHandler(ctx context.Context, key string, hoq handlerOnQueue) error {
+	if ctx.Err() != nil {
+		return errors.New("context canceled, not adding handler")
+	}
 	c.wmut.Lock()
 	defer c.wmut.Unlock()
 	if ca := c.watchedObjects[key]; ca != nil {
 		ca.handlers = append(ca.handlers, hoq)
+	} else {
+		return fmt.Errorf("watching handler could not be attached: object %s not found", key)
 	}
+	return nil
 }
 
 func (c *Client) callHandlers(ctx context.Context, key string, ev watch.Event) {
+	if ctx.Err() != nil {
+		return
+	}
 	var fn func(hoq handlerOnQueue)
 	switch ev.Type {
 	case watch.Added:
@@ -208,7 +251,7 @@ func (c *Client) callHandlers(ctx context.Context, key string, ev watch.Event) {
 func (c *Client) GetSource(ctx context.Context, obj client.Object, h handler.EventHandler) (source.Source, error) {
 	// Prepare a Source and make sure it is associated with a watch
 	rlog := log.FromContext(ctx).WithName("narrowcache")
-	rlog.WithValues("name", obj.GetName(), "namespace", obj.GetNamespace()).Info("Getting Source:")
+	rlog.V(1).WithValues("name", obj.GetName(), "namespace", obj.GetNamespace()).Info("Getting Source:")
 	gvk, err := c.GroupVersionKindFor(obj)
 	if err != nil {
 		return nil, err
@@ -226,10 +269,32 @@ func (c *Client) GetSource(ctx context.Context, obj client.Object, h handler.Eve
 
 	return &NarrowSource{
 		handler: h,
-		onStart: func(_ context.Context, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-			c.addHandler(key, handlerOnQueue{handler: h, queue: q})
+		onStart: func(ctx context.Context, q workqueue.TypedRateLimitingInterface[reconcile.Request]) error {
+			return c.addHandler(ctx, key, handlerOnQueue{handler: h, queue: q})
 		},
 	}, nil
+}
+
+// EnqueueRequestOnEvents creates a Source from which the controller will enqueue reconcile requests upon change.
+// This function is NOT idempotent, it should be called at init, outside of any reconcile loop.
+// The variant SafeEnqueueRequestOnEvents can be called safely from a reconcile loop.
+func (c *Client) EnqueueRequestOnEvents(ctx context.Context, ctrl controller.Controller, obj client.Object, req reconcile.Request, predicate func(client.Object) bool) error {
+	s, err := c.GetSource(ctx, obj,
+		handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
+			if predicate != nil && predicate(o) {
+				return []reconcile.Request{req}
+			}
+			return nil
+		}),
+	)
+	if err != nil {
+		return fmt.Errorf("could not create narrowcache source for %s/%s/%s: %w", obj.GetObjectKind(), obj.GetNamespace(), obj.GetName(), err)
+	}
+	// Note that currently, watches are never removed (they can't - cf https://github.com/kubernetes-sigs/controller-runtime/issues/1884)
+	if err = ctrl.Watch(s); err != nil {
+		return fmt.Errorf("could not start narrowcache watch for %s/%s/%s: %w", obj.GetObjectKind(), obj.GetNamespace(), obj.GetName(), err)
+	}
+	return nil
 }
 
 func (c *Client) clearEntry(ctx context.Context, obj client.Object) {
@@ -237,7 +302,7 @@ func (c *Client) clearEntry(ctx context.Context, obj client.Object) {
 	gvk, _ := c.GroupVersionKindFor(obj)
 	strGVK := gvk.String()
 	if _, managed := c.watchedGVKs[strGVK]; managed {
-		log.FromContext(ctx).
+		log.FromContext(ctx).V(1).
 			WithName("narrowcache").
 			WithValues("name", obj.GetName(), "namespace", obj.GetNamespace()).
 			Info("Invalidating cache entry")

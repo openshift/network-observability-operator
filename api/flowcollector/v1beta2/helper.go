@@ -2,16 +2,10 @@ package v1beta2
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
 )
-
-func (spec *FlowCollectorSpec) GetNamespace() string {
-	if spec.Namespace != "" {
-		return spec.Namespace
-	}
-	return constants.DefaultOperatorNamespace
-}
 
 func (spec *FlowCollectorSpec) OnHold() bool {
 	return spec.Execution.Mode == OnHold
@@ -104,6 +98,17 @@ func (spec *FlowCollectorEBPF) IsDNSTrackingEnabled() bool {
 	return spec.IsAgentFeatureEnabled(DNSTracking)
 }
 
+// GetDNSTrackingPorts returns the DNS tracking ports as a comma-separated string for the eBPF agent.
+func (spec *FlowCollectorEBPF) GetDNSTrackingPorts() string {
+	// Convert []int32 to comma-separated string
+	// Default is already set at API level via kubebuilder tag, so this will always have at least [53, 5353]
+	ports := make([]string, len(spec.DNSTrackingPorts))
+	for i, port := range spec.DNSTrackingPorts {
+		ports[i] = strconv.Itoa(int(port))
+	}
+	return strings.Join(ports, ",")
+}
+
 func (spec *FlowCollectorEBPF) IsFlowRTTEnabled() bool {
 	return spec.IsAgentFeatureEnabled(FlowRTT)
 }
@@ -169,7 +174,11 @@ func (spec *FlowCollectorFLP) IsZoneEnabled() bool {
 }
 
 func (spec *FlowCollectorFLP) IsSubnetLabelsEnabled() bool {
-	return spec.HasAutoDetectOpenShiftNetworks() || len(spec.SubnetLabels.CustomLabels) > 0
+	return spec.HasAutoDetectNetworks() || len(spec.SubnetLabels.CustomLabels) > 0
+}
+
+func (spec *FlowCollectorFLP) IsBgpEnrichmentEnabled() bool {
+	return spec != nil && spec.BgpEnrichment != nil && *spec.BgpEnrichment
 }
 
 func (spec *FlowCollectorSpec) GetSecondaryIndexes() []SecondaryNetwork {
@@ -186,8 +195,14 @@ func (spec *FlowCollectorSpec) GetSecondaryIndexes() []SecondaryNetwork {
 	return nil
 }
 
-func (spec *FlowCollectorFLP) HasAutoDetectOpenShiftNetworks() bool {
-	return spec.SubnetLabels.OpenShiftAutoDetect == nil || *spec.SubnetLabels.OpenShiftAutoDetect
+func (spec *FlowCollectorFLP) HasAutoDetectNetworks() bool {
+	if spec.SubnetLabels.AutoDetect != nil {
+		return *spec.SubnetLabels.AutoDetect
+	}
+	if spec.SubnetLabels.OpenShiftAutoDetect != nil {
+		return *spec.SubnetLabels.OpenShiftAutoDetect
+	}
+	return true
 }
 
 func (spec *FlowCollectorFLP) HasFLPDeduper() bool {
@@ -210,11 +225,15 @@ func (spec *FlowCollectorFLP) GetMetricsPort() int32 {
 	return port
 }
 
-func (spec *FlowCollectorSpec) DeployNetworkPolicy(trueByDefault bool) bool {
-	if trueByDefault {
-		return spec.NetworkPolicy.Enable == nil || *spec.NetworkPolicy.Enable
+func ShouldInstallNetworkPolicy(config *bool, cni NetworkType) bool {
+	if cni == OpenShiftSDN {
+		return false
 	}
-	return spec.NetworkPolicy.Enable != nil && *spec.NetworkPolicy.Enable
+	if config != nil {
+		return *config
+	}
+	// Default true only for recognized CNIs
+	return cni != ""
 }
 
 func (spec *FlowCollectorFLP) GetFLPReplicas() int32 {
@@ -235,6 +254,40 @@ func (spec *FlowCollectorFLP) IsUnmanagedFLPReplicas() bool {
 		return true
 	}
 	return spec.KafkaConsumerAutoscaler.IsHPAEnabled()
+}
+
+func (spec *FlowCollectorFLP) IsInformerCacheProxyEnabled() bool {
+	return spec.InformerCacheProxy != nil && spec.InformerCacheProxy.Enabled != nil && *spec.InformerCacheProxy.Enabled
+}
+
+// DefaultK8sCachePort is the default gRPC port where FLP processors listen for k8scache updates
+const DefaultK8sCachePort int32 = 9402
+
+// GetK8sCachePort returns the gRPC port where FLP processors listen for k8scache updates.
+// If spec.processor.informerCacheProxy.advanced.processorPort is configured, it returns that value.
+// Otherwise, it returns the default port (9402).
+func (spec *FlowCollectorFLP) GetK8sCachePort() int32 {
+	if spec.InformerCacheProxy != nil &&
+		spec.InformerCacheProxy.Advanced != nil &&
+		spec.InformerCacheProxy.Advanced.ProcessorPort != nil {
+		return *spec.InformerCacheProxy.Advanced.ProcessorPort
+	}
+	return DefaultK8sCachePort
+}
+
+func (spec *FlowCollectorInformerCacheProxy) GetTLSType() TLSConfigType {
+	if spec == nil || spec.TLS == nil {
+		return TLSAuto
+	}
+	return spec.TLS.Type
+}
+
+func (spec *FlowCollectorInformerCacheProxy) UsesOpenShiftServiceCA(isOpenShift bool) bool {
+	if !isOpenShift {
+		return false
+	}
+	tlsType := spec.GetTLSType()
+	return tlsType == TLSAuto
 }
 
 func (spec *FlowCollectorConsolePlugin) IsUnmanagedConsolePluginReplicas() bool {

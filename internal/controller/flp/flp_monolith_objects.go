@@ -58,6 +58,7 @@ func (b *monolithBuilder) daemonSet(annotations map[string]string) *appsv1.Daemo
 	netType := hostNetwork
 	if b.info.ClusterInfo.IsOpenShift() {
 		netType = hostPort
+		annotations[constants.OpenShiftReqSCCAnnotation] = "hostnetwork"
 	}
 	pod := podTemplate(
 		monoName,
@@ -68,6 +69,8 @@ func (b *monolithBuilder) daemonSet(annotations map[string]string) *appsv1.Daemo
 		&b.volumes,
 		netType,
 		annotations,
+		b.info.ClusterInfo.IsOpenShift(),
+		b.info.TLSConfig,
 	)
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -89,6 +92,9 @@ func (b *monolithBuilder) daemonSet(annotations map[string]string) *appsv1.Daemo
 }
 
 func (b *monolithBuilder) deployment(annotations map[string]string) *appsv1.Deployment {
+	if b.info.ClusterInfo.IsOpenShift() {
+		annotations[constants.OpenShiftReqSCCAnnotation] = constants.OpenShiftReqSCCAnnotationDefaultValue
+	}
 	pod := podTemplate(
 		monoName,
 		b.version,
@@ -98,6 +104,8 @@ func (b *monolithBuilder) deployment(annotations map[string]string) *appsv1.Depl
 		&b.volumes,
 		svc,
 		annotations,
+		b.info.ClusterInfo.IsOpenShift(),
+		b.info.TLSConfig,
 	)
 	replicas := b.desired.Processor.GetFLPReplicas()
 	return &appsv1.Deployment{
@@ -123,6 +131,7 @@ func (b *monolithBuilder) deployment(annotations map[string]string) *appsv1.Depl
 func (b *monolithBuilder) configMaps() (*corev1.ConfigMap, string, *corev1.ConfigMap, error) {
 	pipeline, err := createPipeline(
 		b.desired,
+		b.info.Namespace,
 		b.flowMetrics,
 		b.fcSlices,
 		b.detectedSubnets,
@@ -136,7 +145,7 @@ func (b *monolithBuilder) configMaps() (*corev1.ConfigMap, string, *corev1.Confi
 	}
 
 	// Get static and dynamic CM
-	static, dynamic, err := getJSONConfigs(b.desired, &b.volumes, b.promTLS, pipeline, monoDynConfigMap)
+	static, dynamic, err := getJSONConfigs(b.desired, b.info.Namespace, &b.volumes, b.promTLS, pipeline, monoDynConfigMap)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -168,13 +177,17 @@ func (b *monolithBuilder) service() *corev1.Service {
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{"app": monoName},
-			Ports: []corev1.ServicePort{{
-				Name:       constants.FLPPortName,
-				Port:       port,
-				Protocol:   corev1.ProtocolTCP,
-				TargetPort: intstr.FromInt32(port),
-			}},
 		},
+	}
+	// In Direct mode (hostNetwork/hostPort), the main flow-ingest port is reached directly
+	// by the agents, not through this Service; only expose it otherwise.
+	if !b.desired.UseHostNetwork() {
+		svc.Spec.Ports = append(svc.Spec.Ports, corev1.ServicePort{
+			Name:       constants.FLPPortName,
+			Port:       port,
+			Protocol:   corev1.ProtocolTCP,
+			TargetPort: intstr.FromInt32(port),
+		})
 	}
 	if b.info.ClusterInfo.IsOpenShift() && (b.desired.Processor.Service == nil || b.desired.Processor.Service.TLSType == flowslatest.TLSAuto) {
 		svc.Annotations[constants.OpenShiftCertificateAnnotation] = monoCertSecretName
@@ -212,7 +225,6 @@ func (b *monolithBuilder) serviceMonitor() *monitoringv1.ServiceMonitor {
 		b.info.Namespace,
 		monoName,
 		b.version,
-		b.info.IsDownstream,
 		b.info.ClusterInfo.HasPromServiceDiscoveryRole(),
 	)
 }

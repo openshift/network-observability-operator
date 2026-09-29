@@ -8,7 +8,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
 	"github.com/netobserv/netobserv-operator/internal/controller/reconcilers"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
-	"github.com/netobserv/netobserv-operator/internal/pkg/resources"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 	osv1 "github.com/openshift/api/security/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -60,7 +60,7 @@ func (c *Reconciler) reconcileNamespace(ctx context.Context) error {
 	desired := &v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   ns,
-			Labels: namespaceLabels(true, c.IsDownstream),
+			Labels: namespaceLabels(true, c.Vendor),
 		},
 	}
 	if actual == nil {
@@ -68,7 +68,7 @@ func (c *Reconciler) reconcileNamespace(ctx context.Context) error {
 		return c.CreateOwned(ctx, desired)
 	}
 
-	binding := resources.GetExposeMetricsRoleBinding(ns)
+	binding := roles.GetExposeMetricsRoleBinding(ns)
 	if err := c.ReconcileRoleBinding(ctx, binding); err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func (c *Reconciler) reconcileNamespace(ctx context.Context) error {
 	// We noticed that audit labels are automatically removed
 	// in some configurations of K8s, so to avoid an infinite update loop, we just ignore
 	// it (if the user removes it manually, it's at their own risk)
-	if !helper.IsSubSet(actual.ObjectMeta.Labels, namespaceLabels(false, c.IsDownstream)) {
+	if !helper.IsSubSet(actual.ObjectMeta.Labels, namespaceLabels(false, c.Vendor)) {
 		rlog.Info("updating namespace")
 		return c.UpdateIfOwned(ctx, actual, desired)
 	}
@@ -85,7 +85,7 @@ func (c *Reconciler) reconcileNamespace(ctx context.Context) error {
 	return nil
 }
 
-func namespaceLabels(includeAudit, isDownstream bool) map[string]string {
+func namespaceLabels(includeAudit bool, vendor constants.Vendor) map[string]string {
 	l := map[string]string{
 		"app":                                constants.OperatorName,
 		"pod-security.kubernetes.io/enforce": "privileged",
@@ -93,7 +93,7 @@ func namespaceLabels(includeAudit, isDownstream bool) map[string]string {
 	if includeAudit {
 		l["pod-security.kubernetes.io/audit"] = "privileged"
 	}
-	if isDownstream {
+	if vendor == constants.VendorOpenShiftDownstream {
 		l["openshift.io/cluster-monitoring"] = "true"
 	}
 	return l
@@ -118,7 +118,7 @@ func (c *Reconciler) reconcileServiceAccount(ctx context.Context, desired *flows
 		}
 	}
 
-	if desired.Spec.OnHold() {
+	if desired.Spec.OnHold() && actual != nil {
 		return c.DeleteIfOwned(ctx, actual)
 	}
 
@@ -126,7 +126,7 @@ func (c *Reconciler) reconcileServiceAccount(ctx context.Context, desired *flows
 		rlog.Info("creating service account")
 		return c.CreateOwned(ctx, sAcc)
 	}
-	rlog.Info("service account already reconciled. Doing nothing")
+	rlog.Info("service account already reconciled, doing nothing")
 	return nil
 }
 
@@ -142,8 +142,7 @@ func (c *Reconciler) reconcileVendorPermissions(
 func (c *Reconciler) reconcileOpenshiftPermissions(
 	ctx context.Context, desired *flowslatest.FlowCollectorEBPF,
 ) error {
-	rlog := log.FromContext(ctx,
-		"securityContextConstraints", constants.EBPFSecurityContext)
+	rlog := log.FromContext(ctx, "securityContextConstraints", constants.EBPFSecurityContext)
 	scc := &osv1.SecurityContextConstraints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: constants.EBPFSecurityContext,

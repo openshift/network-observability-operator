@@ -10,7 +10,6 @@ rules:
   - configmaps
   - namespaces
   - persistentvolumeclaims
-  - secrets
   - serviceaccounts
   - services
   verbs:
@@ -75,14 +74,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - apps
-  resources:
-  - replicasets
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - autoscaling
   resources:
   - horizontalpodautoscalers
@@ -117,6 +108,7 @@ rules:
 - apiGroups:
   - config.openshift.io
   resources:
+  - apiservers
   - clusterversions
   - networks
   verbs:
@@ -174,15 +166,6 @@ rules:
   - patch
   - update
 - apiGroups:
-  - k8s.ovn.org
-  resources:
-  - clusteruserdefinednetworks
-  - userdefinednetworks
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - loki.grafana.com
   resources:
   - lokistacks
@@ -190,20 +173,6 @@ rules:
   - get
   - list
   - watch
-- apiGroups:
-  - loki.grafana.com
-  resourceNames:
-  - logs
-  resources:
-  - network
-  verbs:
-  - create
-- apiGroups:
-  - metrics.k8s.io
-  resources:
-  - pods
-  verbs:
-  - create
 - apiGroups:
   - monitoring.coreos.com
   resources:
@@ -236,7 +205,7 @@ rules:
   verbs:
   - get
   - list
-  - update
+  - patch
   - watch
 - apiGroups:
   - operator.openshift.io
@@ -248,8 +217,33 @@ rules:
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io
+  resourceNames:
+  - netobserv-flowcollector-viewer-role
+  - netobserv-hostnetwork
+  - netobserv-informers
+  - netobserv-loki-writer
+  - netobserv-token-review
   resources:
   - clusterrolebindings
+  verbs:
+  - get
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - netobserv-flowcollector-viewer-role
+  - netobserv-hostnetwork
+  - netobserv-informers
+  - netobserv-loki-writer
+  - netobserv-token-review
+  resources:
+  - clusterroles
+  verbs:
+  - bind
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - rolebindings
   verbs:
   - create
@@ -265,7 +259,6 @@ rules:
   verbs:
   - create
   - list
-  - update
   - watch
 - apiGroups:
   - security.openshift.io
@@ -275,3 +268,11 @@ rules:
   - securitycontextconstraints
   verbs:
   - use
+- apiGroups:
+  - security.openshift.io
+  resourceNames:
+  - netobserv-ebpf-agent
+  resources:
+  - securitycontextconstraints
+  verbs:
+  - update

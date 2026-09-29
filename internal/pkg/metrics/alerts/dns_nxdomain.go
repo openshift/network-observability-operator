@@ -33,7 +33,7 @@ func (r *dnsNxDomain) GetAnnotations() (map[string]string, error) {
 			r.ctx.getLowestThreshold(),
 			getAlertLegend(r.ctx),
 		),
-		"runbook_url":       buildRunbookURL(r.ctx.template),
+		"runbook_url":       BuildRunbookURL(r.ctx.template),
 		healthAnnotationKey: encodeHealthAnnotation(healthAnnot),
 	}, nil
 }
@@ -47,8 +47,8 @@ func (r *dnsNxDomain) Build() (*monitoringv1.Rule, error) {
 	metric, totalMetric := getMetricsForRule(r.ctx)
 	filter := getPromQLFilters(r.ctx, `DnsFlagsResponseCode="NXDomain"`)
 	totalFilter := getPromQLFilters(r.ctx, "")
-	metricsRate := promQLRateFromMetric(metric, "_count", filter, "2m", "")
-	totalRate := promQLRateFromMetric(totalMetric, "_count", totalFilter, "2m", "")
+	metricsRate := promQLRateFromMetric(metric, "", filter, "2m", "")
+	totalRate := promQLRateFromMetric(totalMetric, "", totalFilter, "2m", "")
 	metricsSumBy := sumBy(metricsRate, r.ctx.healthRule.GroupBy, r.ctx.side, "")
 	totalSumBy := sumBy(totalRate, r.ctx.healthRule.GroupBy, r.ctx.side, "")
 	promql := percentagePromQL(metricsSumBy, totalSumBy, r.ctx.alertThreshold, r.ctx.upperThreshold, r.ctx.healthRule.LowVolumeThreshold)

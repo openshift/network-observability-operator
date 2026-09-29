@@ -19,7 +19,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
 	"github.com/netobserv/netobserv-operator/internal/pkg/metrics/alerts"
-	"github.com/netobserv/netobserv-operator/internal/pkg/resources"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 )
 
 type transformerReconciler struct {
@@ -31,8 +31,6 @@ type transformerReconciler struct {
 	staticConfigMap  *corev1.ConfigMap
 	dynamicConfigMap *corev1.ConfigMap
 	rbConfigWatcher  *rbacv1.RoleBinding
-	rbLokiWriter     *rbacv1.ClusterRoleBinding
-	rbInformer       *rbacv1.ClusterRoleBinding
 	serviceMonitor   *monitoringv1.ServiceMonitor
 	prometheusRule   *monitoringv1.PrometheusRule
 }
@@ -46,9 +44,7 @@ func newTransformerReconciler(cmn *reconcilers.Instance) *transformerReconciler 
 		serviceAccount:   cmn.Managed.NewServiceAccount(transfoName),
 		staticConfigMap:  cmn.Managed.NewConfigMap(transfoConfigMap),
 		dynamicConfigMap: cmn.Managed.NewConfigMap(transfoDynConfigMap),
-		rbConfigWatcher:  cmn.Managed.NewRB(resources.GetRoleBindingName(transfoShortName, constants.ConfigWatcherRole)),
-		rbLokiWriter:     cmn.Managed.NewCRB(resources.GetClusterRoleBindingName(transfoShortName, constants.LokiWriterRole)),
-		rbInformer:       cmn.Managed.NewCRB(resources.GetClusterRoleBindingName(transfoShortName, constants.FLPInformersRole)),
+		rbConfigWatcher:  cmn.Managed.NewRB(roles.GetRoleBindingName(transfoShortName, roles.ConfigWatcherRole)),
 	}
 	if cmn.ClusterInfo.HasSvcMonitor() {
 		rec.serviceMonitor = cmn.Managed.NewServiceMonitor(transfoServiceMonitor)
@@ -75,16 +71,20 @@ func (r *transformerReconciler) reconcile(ctx context.Context, desired *flowslat
 		return err
 	}
 
-	if desired.Spec.OnHold() {
-		r.Status.SetUnused("FlowCollector is on hold")
-		r.Managed.TryDeleteAll(ctx)
-		return nil
+	isDelete := desired.Spec.OnHold() || !desired.Spec.UseKafka()
+
+	if err := r.reconcileCRB(ctx, &desired.Spec, isDelete); err != nil {
+		return err
 	}
 
-	if !desired.Spec.UseKafka() {
-		r.Status.SetUnused("Transformer only used with Kafka")
-		r.Managed.TryDeleteAll(ctx)
-		return nil
+	if isDelete {
+		if desired.Spec.OnHold() {
+			r.Status.SetUnused("FlowCollector is on hold")
+		}
+		if !desired.Spec.UseKafka() {
+			r.Status.SetUnused("Transformer only used with Kafka")
+		}
+		return r.Managed.TryDeleteAll(ctx)
 	}
 
 	builder, err := newTransfoBuilder(r.Instance, &desired.Spec, flowMetrics, fcSlices, detectedSubnets)
@@ -186,6 +186,7 @@ func (r *transformerReconciler) reconcileHPA(ctx context.Context, desiredFLP *fl
 		r.Instance,
 		r.hpa,
 		builder.autoScaler(),
+		//nolint:staticcheck
 		&desiredFLP.KafkaConsumerAutoscaler,
 		&report,
 	)
@@ -219,25 +220,25 @@ func (r *transformerReconciler) reconcilePermissions(ctx context.Context, builde
 		return r.CreateOwned(ctx, builder.serviceAccount())
 	} // We only configure name, update is not needed for now
 
-	// Informers
-	r.rbInformer = resources.GetClusterRoleBinding(r.Namespace, transfoShortName, transfoName, transfoName, constants.FLPInformersRole)
-	if err := r.ReconcileClusterRoleBinding(ctx, r.rbInformer); err != nil {
+	// Config watcher
+	r.rbConfigWatcher = roles.GetRoleBinding(r.Namespace, transfoShortName, transfoName, transfoName, roles.ConfigWatcherRole, true)
+	if err := r.ReconcileRoleBinding(ctx, r.rbConfigWatcher); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func (r *transformerReconciler) reconcileCRB(ctx context.Context, desired *flowslatest.FlowCollectorSpec, isDelete bool) error {
 	// Loki writer
-	if builder.desired.UseLoki() && builder.desired.Loki.Mode == flowslatest.LokiModeLokiStack {
-		r.rbLokiWriter = resources.GetClusterRoleBinding(r.Namespace, transfoShortName, transfoName, transfoName, constants.LokiWriterRole)
-		if err := r.ReconcileClusterRoleBinding(ctx, r.rbLokiWriter); err != nil {
-			return err
-		}
-	} else {
-		r.Managed.TryDelete(ctx, r.rbLokiWriter)
+	useLokiWriter := desired.UseLoki() && desired.Loki.Mode == flowslatest.LokiModeLokiStack && !isDelete
+	if err := r.ReconcileClusterRoleBinding(ctx, r.Namespace, transfoName, roles.LokiWriterRole, !useLokiWriter); err != nil {
+		return err
 	}
 
-	// Config watcher
-	r.rbConfigWatcher = resources.GetRoleBinding(r.Namespace, transfoShortName, transfoName, transfoName, constants.ConfigWatcherRole, true)
-	if err := r.ReconcileRoleBinding(ctx, r.rbConfigWatcher); err != nil {
+	// Informers - when centralized informers are disabled, flowlogs-pipeline needs direct K8s API access
+	useInformers := !desired.Processor.IsInformerCacheProxyEnabled() && !isDelete
+	if err := r.ReconcileClusterRoleBinding(ctx, r.Namespace, transfoName, roles.FLPInformersRole, !useInformers); err != nil {
 		return err
 	}
 

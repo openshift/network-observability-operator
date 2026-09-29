@@ -44,7 +44,6 @@ const configFile = "config.yaml"
 const configVolume = "config-volume"
 const configPath = "/opt/app-root/"
 const metricsSvcName = constants.PluginName + "-metrics"
-const metricsPort = 9002
 const metricsPortName = "metrics"
 
 type builder struct {
@@ -187,7 +186,6 @@ func (b *builder) deployment(name, cmDigest string) *appsv1.Deployment {
 }
 
 func (b *builder) podTemplate(name, cmDigest string) *corev1.PodTemplateSpec {
-	var sa string
 	annotations := map[string]string{}
 	args := []string{
 		"-loglevel", b.desired.ConsolePlugin.LogLevel,
@@ -195,8 +193,11 @@ func (b *builder) podTemplate(name, cmDigest string) *corev1.PodTemplateSpec {
 	volumes := []corev1.Volume{}
 	volumeMounts := []corev1.VolumeMount{}
 
+	if b.info.ClusterInfo.IsOpenShift() {
+		annotations[constants.OpenShiftReqSCCAnnotation] = constants.OpenShiftReqSCCAnnotationDefaultValue
+	}
+
 	if cmDigest != "" {
-		sa = name
 		annotations[constants.PodConfigurationDigest] = cmDigest
 
 		args = append(args, "-config", filepath.Join(configPath, configFile))
@@ -242,17 +243,18 @@ func (b *builder) podTemplate(name, cmDigest string) *corev1.PodTemplateSpec {
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{
-				Name:            name,
-				Image:           b.info.Images[b.imageRef],
-				ImagePullPolicy: corev1.PullPolicy(b.desired.ConsolePlugin.ImagePullPolicy),
-				Resources:       *b.desired.ConsolePlugin.Resources.DeepCopy(),
-				VolumeMounts:    b.volumes.AppendMounts(volumeMounts),
-				Env:             []corev1.EnvVar{constants.EnvNoHTTP2},
-				Args:            args,
-				SecurityContext: helper.ContainerDefaultSecurityContext(),
+				Name:                     name,
+				Image:                    b.info.Images[b.imageRef],
+				ImagePullPolicy:          corev1.PullPolicy(b.desired.ConsolePlugin.ImagePullPolicy),
+				Resources:                *b.desired.ConsolePlugin.Resources.DeepCopy(),
+				VolumeMounts:             b.volumes.AppendMounts(volumeMounts),
+				Env:                      helper.AppendTLSEnvVars([]corev1.EnvVar{constants.EnvNoHTTP2}, b.info.TLSConfig),
+				Args:                     args,
+				SecurityContext:          helper.ContainerDefaultSecurityContext(),
+				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 			}},
 			Volumes:            b.volumes.AppendVolumes(volumes),
-			ServiceAccountName: sa,
+			ServiceAccountName: name,
 			NodeSelector:       b.advanced.Scheduling.NodeSelector,
 			Tolerations:        b.advanced.Scheduling.Tolerations,
 			Affinity:           b.advanced.Scheduling.Affinity,
@@ -274,9 +276,12 @@ func (b *builder) autoScaler() *ascv2.HorizontalPodAutoscaler {
 				Kind:       "Deployment",
 				Name:       constants.PluginName,
 			},
+			//nolint:staticcheck
 			MinReplicas: b.desired.ConsolePlugin.Autoscaler.MinReplicas,
+			//nolint:staticcheck
 			MaxReplicas: b.desired.ConsolePlugin.Autoscaler.MaxReplicas,
-			Metrics:     b.desired.ConsolePlugin.Autoscaler.Metrics,
+			//nolint:staticcheck
+			Metrics: b.desired.ConsolePlugin.Autoscaler.Metrics,
 		},
 	}
 }
@@ -315,13 +320,13 @@ func (b *builder) metricsService() *corev1.Service {
 		Spec: corev1.ServiceSpec{
 			Selector: b.selector,
 			Ports: []corev1.ServicePort{{
-				Port:     metricsPort,
+				Port:     constants.CPMetricsPort,
 				Protocol: corev1.ProtocolTCP,
 				Name:     metricsPortName,
 				// Some Kubernetes versions might automatically set TargetPort to Port. We need to
 				// explicitly set it here so the reconcile loop verifies that the owned service
 				// is equal as the desired service
-				TargetPort: intstr.FromInt32(metricsPort),
+				TargetPort: intstr.FromInt32(constants.CPMetricsPort),
 			}},
 		},
 	}
@@ -505,9 +510,12 @@ func (b *builder) setFrontendConfig(fconf *cfg.FrontendConfig, metrics []cfg.Met
 	if b.desired.Processor.IsSubnetLabelsEnabled() {
 		fconf.Features = append(fconf.Features, "subnetLabels")
 	}
+	if b.desired.Processor.IsBgpEnrichmentEnabled() {
+		fconf.Features = append(fconf.Features, "bgpEnrichment")
+	}
 
 	// Add health rules metadata for frontend
-	fconf.RecordingAnnotations = b.getHealthRecordingAnnotations()
+	b.fillHealthData(fconf)
 
 	// Filter-out disabled scopes
 	var scopes []cfg.ScopeConfig
@@ -609,18 +617,24 @@ func filterScopeGroupsForMetrics(scopes []cfg.ScopeConfig, metrics []cfg.MetricI
 	return scopes
 }
 
-func (b *builder) getHealthRecordingAnnotations() map[string]map[string]string {
-	annotsPerRecording := make(map[string]map[string]string)
-	healthRules, _ := alerts.BuildHealthRules(b.desired)
+func (b *builder) fillHealthData(frontCfg *cfg.FrontendConfig) {
+	frontCfg.RecordingAnnotations = make(map[string]map[string]string)
+	healthRules, templates, _ := alerts.BuildHealthRules(b.desired)
 	for _, r := range healthRules {
 		rname := r.RecordingName()
 		if rname != "" {
 			if a, _ := r.GetAnnotations(); len(a) > 0 {
-				annotsPerRecording[rname] = a
+				frontCfg.RecordingAnnotations[rname] = a
 			}
 		}
 	}
-	return annotsPerRecording
+	for _, tpl := range flowslatest.AllHealthRuleTemplates {
+		frontCfg.HealthTemplates = append(frontCfg.HealthTemplates, cfg.HealthTemplate{
+			Name:         tpl,
+			RunbookURL:   alerts.BuildRunbookURL(tpl),
+			IsConfigured: slices.Contains(templates, tpl),
+		})
+	}
 }
 
 // returns a configmap with a digest of its configuration contents, which will be used to
@@ -631,10 +645,17 @@ func (b *builder) configMap(ctx context.Context, externalRecordingAnnotations ma
 		Server: cfg.ServerConfig{
 			Port: int(*b.advanced.Port),
 		},
+		Kubernetes: cfg.K8SConfig{
+			ForwardUserToken: true,
+		},
 	}
 	if b.useStandalone {
-		config.Server.AuthCheck = "none"
+		config.ConsoleMode = cfg.Standalone
+		// No access management yet in the standalone console
+		config.Kubernetes.ForwardUserToken = false
+		config.Kubernetes.TokenPath = b.volumes.AddToken(constants.PluginName)
 	} else {
+		config.ConsoleMode = cfg.OpenShiftPlugin
 		config.Server.CertPath = "/var/serving-cert/tls.crt"
 		config.Server.KeyPath = "/var/serving-cert/tls.key"
 	}

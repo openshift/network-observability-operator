@@ -17,15 +17,13 @@ import (
 
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
+	"github.com/netobserv/netobserv-operator/internal/controller/lokistack"
 	"github.com/netobserv/netobserv-operator/internal/controller/reconcilers"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
-	"github.com/netobserv/netobserv-operator/internal/pkg/resources"
+	"github.com/netobserv/netobserv-operator/internal/pkg/roles"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
-
-// Type alias
-type pluginSpec = flowslatest.FlowCollectorConsolePlugin
 
 // CPReconciler reconciles the current console plugin state with the desired configuration
 type CPReconciler struct {
@@ -60,7 +58,8 @@ func (r *CPReconciler) Reconcile(ctx context.Context, desired *flowslatest.FlowC
 	l := log.FromContext(ctx).WithName("web-console")
 	ctx = log.IntoContext(ctx, l)
 
-	defer r.Status.Commit(ctx, r.Client)
+	commit := r.Status.Reset()
+	defer commit(ctx, r.Client)
 
 	err := r.reconcile(ctx, desired, lokiStatus)
 	if err != nil {
@@ -84,21 +83,36 @@ func (r *CPReconciler) reconcile(ctx context.Context, desired *flowslatest.FlowC
 
 	hasPluginAPI := r.ClusterInfo.HasConsolePlugin()
 	if hasPluginAPI {
-		if err = r.checkAutoPatch(ctx, desired, constants.PluginName); err != nil {
-			return err
-		}
+		r.checkAutoPatch(ctx, desired, constants.PluginName)
+	}
+	deploy := desired.Spec.NeedsConsolePluginDeployment(hasPluginAPI)
+	standalone := desired.Spec.UseStandaloneConsole(hasPluginAPI)
+
+	if err := r.reconcileCRB(ctx, constants.PluginName, standalone, !deploy); err != nil {
+		return err
 	}
 
-	if desired.Spec.NeedsConsolePluginDeployment(hasPluginAPI) {
+	if deploy {
+		if lokiStatus != nil && lokiStatus.Status == status.StatusFailure &&
+			(lokiStatus.Reason == lokistack.LokiStackAPIMissing || lokiStatus.Reason == lokistack.LokiCantFetchLokiStack) {
+			// If LokiStack is missing, turn off TLS config; queries will fail anyway, but we don't want to try mounting
+			// the missing certificates, as it prevents the console plugin pod to start.
+			lokiCopy := *r.Loki
+			lokiCopy.LokiManualParams.TLS.Enable = false
+			lokiCopy.LokiManualParams.StatusTLS.Enable = false
+			r.Loki = &lokiCopy
+			r.Status.SetDegraded("LokiStackMissing", "LokiStack is missing, can't mount certificates")
+		}
+
 		// Create object builder
 		builder := newBuilder(r.Instance, &desired.Spec, constants.PluginName)
 
-		if err := r.reconcilePermissions(ctx, &builder, constants.PluginName); err != nil {
+		if err := r.reconcileSA(ctx, &builder, constants.PluginName); err != nil {
 			return err
 		}
 
 		if hasPluginAPI {
-			if err = r.reconcilePlugin(ctx, &builder, &desired.Spec, constants.PluginName, "NetObserv plugin"); err != nil {
+			if err = r.reconcilePlugin(ctx, &builder, constants.PluginName); err != nil {
 				return err
 			}
 		}
@@ -124,15 +138,17 @@ func (r *CPReconciler) reconcile(ctx context.Context, desired *flowslatest.FlowC
 			// Watch for Loki certificates if necessary; we'll ignore in that case the returned digest, as we don't need to restart pods on cert rotation
 			// because certificate is always reloaded from file
 			if _, err = r.Watcher.ProcessCACert(ctx, r.Client, &r.Loki.TLS, r.Namespace); err != nil {
-				return err
+				r.Status.SetDegraded("LokiCACertMissing", err.Error())
 			}
 			if _, _, err = r.Watcher.ProcessMTLSCerts(ctx, r.Client, &r.Loki.StatusTLS, r.Namespace); err != nil {
-				return err
+				r.Status.SetDegraded("LokiMTLSCertMissing", err.Error())
 			}
 		}
 	} else {
 		// delete any existing owned object
-		r.Managed.TryDeleteAll(ctx)
+		if err := r.Managed.TryDeleteAll(ctx); err != nil {
+			return err
+		}
 		if desired.Spec.OnHold() {
 			r.Status.SetUnused("FlowCollector is on hold")
 		} else {
@@ -143,7 +159,7 @@ func (r *CPReconciler) reconcile(ctx context.Context, desired *flowslatest.FlowC
 	return nil
 }
 
-func (r *CPReconciler) checkAutoPatch(ctx context.Context, desired *flowslatest.FlowCollector, name string) error {
+func (r *CPReconciler) checkAutoPatch(ctx context.Context, desired *flowslatest.FlowCollector, name string) {
 	console := operatorsv1.Console{}
 	advancedConfig := helper.GetAdvancedPluginConfig(desired.Spec.ConsolePlugin.Advanced)
 	reg := desired.Spec.UseWebConsole() && *advancedConfig.Register
@@ -152,33 +168,42 @@ func (r *CPReconciler) checkAutoPatch(ctx context.Context, desired *flowslatest.
 			log.FromContext(ctx).Error(err, "Could not get the Console Operator resource for plugin registration. Please register manually.")
 			r.Status.SetDegraded("PluginRegistrationFailed", "Could not auto-register console plugin; manual registration needed")
 		}
-		return nil
+		return
 	}
 	registered := helper.ContainsString(console.Spec.Plugins, name)
 	if reg && !registered {
+		// Note, envtest does not support any kind of patch strategy.
+		// Using MergeFrom (ie. full inspection) is not the most efficient, but it's what makes envtest happy.
+		patch := client.MergeFromWithOptions(console.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		console.Spec.Plugins = append(console.Spec.Plugins, name)
-		return r.Client.Update(ctx, &console)
+		if err := r.Client.Patch(ctx, &console, patch); err != nil {
+			log.FromContext(ctx).Error(err, "Could not update the Console Operator resource for plugin registration. Please register manually.")
+			r.Status.SetDegraded("PluginRegistrationFailed", "Could not auto-register console plugin; manual registration needed")
+		}
 	}
-	return nil
 }
 
-func (r *CPReconciler) reconcilePermissions(ctx context.Context, builder *builder, name string) error {
+func (r *CPReconciler) reconcileCRB(ctx context.Context, name string, useStandalone, isDelete bool) error {
+	if err := r.ReconcileClusterRoleBinding(ctx, r.Namespace, name, roles.ConsoleTokenReviewRole, isDelete); err != nil {
+		return err
+	}
+	// Currently, standalone mode uses service account token, not user token, for permissions.
+	// Add FlowCollector viewer role so that it can display the FC status icon.
+	return r.ReconcileClusterRoleBinding(ctx, r.Namespace, name, roles.FlowCollectorViewerRole, isDelete || !useStandalone)
+}
+
+func (r *CPReconciler) reconcileSA(ctx context.Context, builder *builder, name string) error {
 	if !r.Managed.Exists(r.serviceAccount) {
 		return r.CreateOwned(ctx, builder.serviceAccount(name))
 	} // update not needed for now
 
-	binding := resources.GetClusterRoleBinding(
-		r.Namespace,
-		constants.PluginShortName,
-		name,
-		name,
-		constants.ConsoleTokenReviewRole,
-	)
-	return r.ReconcileClusterRoleBinding(ctx, binding)
+	return nil
 }
 
-func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, desired *flowslatest.FlowCollectorSpec, name, displayName string) error {
-	// Console plugin is cluster-scope (it's not deployed in our namespace) however it must still be updated if our namespace changes
+func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, name string) error {
+	report := helper.NewChangeReport("ConsolePlugin")
+	defer report.LogIfNeeded(ctx)
+
 	oldPlg := osv1.ConsolePlugin{}
 	pluginExists := true
 	err := r.Get(ctx, types.NamespacedName{Name: name}, &oldPlg)
@@ -191,12 +216,12 @@ func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, de
 	}
 
 	// Check if objects need update
-	consolePlugin := builder.consolePlugin(name, displayName)
+	consolePlugin := builder.consolePlugin(name, "NetObserv plugin")
 	if !pluginExists {
 		if err := r.CreateOwned(ctx, consolePlugin); err != nil {
 			return err
 		}
-	} else if pluginNeedsUpdate(&oldPlg, &desired.ConsolePlugin) {
+	} else if helper.ConsolePluginChanged(&oldPlg, consolePlugin, &report) {
 		if err := r.UpdateIfOwned(ctx, &oldPlg, consolePlugin); err != nil {
 			return err
 		}
@@ -205,9 +230,13 @@ func (r *CPReconciler) reconcilePlugin(ctx context.Context, builder *builder, de
 }
 
 func (r *CPReconciler) reconcileConfigMap(ctx context.Context, builder *builder, lokiStatus *status.ComponentStatus) (string, error) {
-	externalRecordingAnnotations, err := getExternalRecordingAnnotations(ctx, r.Client)
-	if err != nil {
-		return "", err
+	var externalRecordingAnnotations map[string]map[string]string
+	var err error
+	if r.ClusterInfo.HasPromRule() {
+		externalRecordingAnnotations, err = getExternalRecordingAnnotations(ctx, r.Client)
+		if err != nil {
+			return "", err
+		}
 	}
 	newCM, configDigest, err := builder.configMap(ctx, externalRecordingAnnotations, lokiStatus)
 	if err != nil {
@@ -270,14 +299,10 @@ func (r *CPReconciler) reconcileHPA(ctx context.Context, builder *builder, desir
 		r.Instance,
 		r.hpa,
 		builder.autoScaler(),
+		//nolint:staticcheck
 		&desired.ConsolePlugin.Autoscaler,
 		&report,
 	)
-}
-
-func pluginNeedsUpdate(plg *osv1.ConsolePlugin, desired *pluginSpec) bool {
-	advancedConfig := helper.GetAdvancedPluginConfig(desired.Advanced)
-	return plg.Spec.Backend.Service.Port != *advancedConfig.Port
 }
 
 // getExternalRecordingAnnotations reads PrometheusRules with label netobserv=true and netobserv.io/network-health annotation.
