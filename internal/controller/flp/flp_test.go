@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/netobserv/flowlogs-pipeline/pkg/config"
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
@@ -46,7 +47,7 @@ const testNamespace = "flp"
 func getConfig() flowslatest.FlowCollectorSpec {
 	return flowslatest.FlowCollectorSpec{
 		DeploymentModel: flowslatest.DeploymentModelDirect,
-		Agent:           flowslatest.FlowCollectorAgent{Type: flowslatest.AgentEBPF},
+		Agent:           flowslatest.FlowCollectorAgent{},
 		Processor: flowslatest.FlowCollectorFLP{
 			ImagePullPolicy: string(pullPolicy),
 			LogLevel:        "trace",
@@ -59,23 +60,9 @@ func getConfig() flowslatest.FlowCollectorSpec {
 					},
 				},
 			},
-			ConsumerReplicas: ptr.To(int32(1)),
-			KafkaConsumerAutoscaler: flowslatest.FlowCollectorHPA{
-				Status:      flowslatest.HPAStatusEnabled,
-				MinReplicas: &minReplicas,
-				MaxReplicas: maxReplicas,
-				Metrics: []ascv2.MetricSpec{{
-					Type: ascv2.ResourceMetricSourceType,
-					Resource: &ascv2.ResourceMetricSource{
-						Name: corev1.ResourceCPU,
-						Target: ascv2.MetricTarget{
-							Type:               ascv2.UtilizationMetricType,
-							AverageUtilization: &targetCPU,
-						},
-					},
-				}},
-			},
-			LogTypes: &outputRecordTypes,
+			ConsumerReplicas:  ptr.To(int32(1)),
+			UnmanagedReplicas: true,
+			LogTypes:          &outputRecordTypes,
 			Advanced: &flowslatest.AdvancedProcessorConfig{
 				Port:       ptr.To(int32(2055)),
 				HealthPort: ptr.To(int32(8080)),
@@ -123,13 +110,27 @@ func useLokiStack(cfg *flowslatest.FlowCollectorSpec) {
 
 func getConfigNoHPA() flowslatest.FlowCollectorSpec {
 	cfg := getConfig()
-	//nolint:staticcheck
-	cfg.Processor.KafkaConsumerAutoscaler.Status = flowslatest.HPAStatusDisabled
+	cfg.Processor.UnmanagedReplicas = false
 	return cfg
 }
 
 func getAutoScalerSpecs() (ascv2.HorizontalPodAutoscaler, flowslatest.FlowCollectorHPA) {
-	var autoScaler = ascv2.HorizontalPodAutoscaler{
+	config := flowslatest.FlowCollectorHPA{
+		Status:      flowslatest.HPAStatusEnabled,
+		MinReplicas: &minReplicas,
+		MaxReplicas: maxReplicas,
+		Metrics: []ascv2.MetricSpec{{
+			Type: ascv2.ResourceMetricSourceType,
+			Resource: &ascv2.ResourceMetricSource{
+				Name: corev1.ResourceCPU,
+				Target: ascv2.MetricTarget{
+					Type:               ascv2.UtilizationMetricType,
+					AverageUtilization: &targetCPU,
+				},
+			},
+		}},
+	}
+	autoScaler := ascv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: testNamespace,
 		},
@@ -138,23 +139,13 @@ func getAutoScalerSpecs() (ascv2.HorizontalPodAutoscaler, flowslatest.FlowCollec
 				Kind: "Deployment",
 				Name: constants.FLPName,
 			},
-			MinReplicas: &minReplicas,
-			MaxReplicas: maxReplicas,
-			Metrics: []ascv2.MetricSpec{{
-				Type: ascv2.ResourceMetricSourceType,
-				Resource: &ascv2.ResourceMetricSource{
-					Name: corev1.ResourceCPU,
-					Target: ascv2.MetricTarget{
-						Type:               ascv2.UtilizationMetricType,
-						AverageUtilization: &targetCPU,
-					},
-				},
-			}},
+			MinReplicas: config.MinReplicas,
+			MaxReplicas: config.MaxReplicas,
+			Metrics:     config.Metrics,
 		},
 	}
 
-	//nolint:staticcheck
-	return autoScaler, getConfig().Processor.KafkaConsumerAutoscaler
+	return autoScaler, config
 }
 
 func monoBuilder(ns string, cfg *flowslatest.FlowCollectorSpec) monolithBuilder {
@@ -596,6 +587,17 @@ func TestServiceMonitorChanged(t *testing.T) {
 	report = helper.NewChangeReport("")
 	assert.True(helper.ServiceMonitorChanged(third, fourth, &report))
 	assert.Contains(report.String(), "ServiceMonitor spec changed")
+
+	// Check scrape interval changed
+	assert.Equal(v1.Duration("15s"), fourth.Spec.Endpoints[0].Interval)
+	cfg.Processor.Metrics.Server.ScrapeInterval = &metav1.Duration{Duration: time.Hour}
+	b, _ = newMonolithBuilder(info.NewInstance(image2, status.Instance{}), &cfg, b.flowMetrics, nil, nil)
+	fifth := b.serviceMonitor()
+	assert.Equal(v1.Duration("1h0m0s"), fifth.Spec.Endpoints[0].Interval)
+
+	report = helper.NewChangeReport("")
+	assert.True(helper.ServiceMonitorChanged(fourth, fifth, &report))
+	assert.Contains(report.String(), "ServiceMonitor spec changed")
 }
 
 func TestPrometheusRuleNoChange(t *testing.T) {
@@ -682,10 +684,8 @@ func TestConfigMapShouldDeserializeAsJSONWithLokiManual(t *testing.T) {
 	assert.EqualValues(*cfg.Loki.Advanced.WriteMaxRetries, lokiCfg.MaxRetries)
 	assert.EqualValues([]string{
 		"SrcK8S_Namespace",
-		"SrcK8S_OwnerName",
 		"SrcK8S_Type",
 		"DstK8S_Namespace",
-		"DstK8S_OwnerName",
 		"DstK8S_Type",
 		"K8S_FlowLayer",
 		"FlowDirection",
@@ -735,10 +735,8 @@ func TestConfigMapShouldDeserializeAsJSONWithLokiStack(t *testing.T) {
 	assert.EqualValues(*cfg.Loki.Advanced.WriteMaxRetries, lokiCfg.MaxRetries)
 	assert.EqualValues([]string{
 		"SrcK8S_Namespace",
-		"SrcK8S_OwnerName",
 		"SrcK8S_Type",
 		"DstK8S_Namespace",
-		"DstK8S_OwnerName",
 		"DstK8S_Type",
 		"K8S_FlowLayer",
 		"FlowDirection",

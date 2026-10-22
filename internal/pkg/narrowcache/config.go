@@ -150,6 +150,21 @@ var (
 			np.SetManagedFields([]metav1.ManagedFieldsEntry{})
 		},
 	}
+	PersistentVolumeClaims = GVKInfo{
+		Obj: &corev1.PersistentVolumeClaim{},
+		Getter: func(ctx context.Context, cl kubernetes.Interface, key client.ObjectKey) (runtime.Object, error) {
+			return cl.CoreV1().PersistentVolumeClaims(key.Namespace).Get(ctx, key.Name, metav1.GetOptions{})
+		},
+		Watcher: func(ctx context.Context, cl kubernetes.Interface, key client.ObjectKey) (watch.Interface, error) {
+			opts := metav1.ListOptions{FieldSelector: fields.OneTermEqualSelector(metav1.ObjectNameField, key.Name).String()}
+			return cl.CoreV1().PersistentVolumeClaims(key.Namespace).Watch(ctx, opts)
+		},
+		Cleanup: func(obj runtime.Object) {
+			pvc := obj.(*corev1.PersistentVolumeClaim)
+			pvc.SetManagedFields([]metav1.ManagedFieldsEntry{})
+			pvc.Status = corev1.PersistentVolumeClaimStatus{}
+		},
+	}
 	Roles = GVKInfo{
 		Obj: &rbacv1.Role{},
 		Getter: func(ctx context.Context, cl kubernetes.Interface, key client.ObjectKey) (runtime.Object, error) {

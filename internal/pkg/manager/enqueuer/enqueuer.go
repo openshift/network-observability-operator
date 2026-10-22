@@ -9,7 +9,7 @@ import (
 
 // Intended for tracking static resources with always-enabled watch
 type Static interface {
-	EnqueueOnChange(context.Context, client.Object, reconcile.Request) error
+	EnqueueOnChange(context.Context, client.Object, reconcile.Request, ...func(client.Object, client.Object) bool) error
 }
 
 // Intended for tracking dynamic resources, tracking the watch status (active/inactive)
