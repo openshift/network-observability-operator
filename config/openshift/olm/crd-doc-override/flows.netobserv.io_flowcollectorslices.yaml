@@ -1,0 +1,2 @@
+# Keep this file just for the sake of triggering the YQ rewrite, even if it is mostly a no-op
+# It allows to have comparable CRD files across bundles

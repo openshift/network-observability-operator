@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"os"
 	"testing"
 	"time"
 
@@ -328,6 +331,37 @@ func TestFetchAvailableAPIs_CompleteFailure(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "API discovery failed completely")
+}
+
+func TestFetchAvailableAPIs_CompleteTimeoutRecovers(t *testing.T) {
+	defer fastStartupBackoff()()
+	info := &Info{}
+	timeout := &url.Error{
+		Op:  "Get",
+		URL: "https://172.30.0.1:443/api?timeout=32s",
+		Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded},
+	}
+	mockDcl := &mockDiscoveryClient{sequence: []mockResponse{
+		{err: timeout},
+		{resources: []*metav1.APIResourceList{
+			makeAPIResourceList("console.openshift.io/v1", "consoleplugins"),
+			makeAPIResourceList("security.openshift.io/v1", "securitycontextconstraints"),
+		}},
+	}}
+	info.dcl = mockDcl
+
+	require.NoError(t, info.fetchAvailableAPIs(context.Background()))
+	assert.Equal(t, 2, mockDcl.calls)
+}
+
+func TestFetchAvailableAPIs_CompleteForbiddenFailsFast(t *testing.T) {
+	defer fastStartupBackoff()()
+	info := &Info{}
+	mockDcl := &mockDiscoveryClient{err: k8serrors.NewForbidden(testAPIServerGR, "cluster", errors.New("no permission"))}
+	info.dcl = mockDcl
+
+	require.Error(t, info.fetchAvailableAPIs(context.Background()))
+	assert.Equal(t, 1, mockDcl.calls)
 }
 
 // TestHasAPI tests the hasAPI helper function
@@ -795,6 +829,9 @@ func TestIsTransientAPIError(t *testing.T) {
 	assert.True(t, isTransientAPIError(k8serrors.NewServiceUnavailable("x")))
 	assert.True(t, isTransientAPIError(k8serrors.NewInternalError(errors.New("x"))))
 	assert.True(t, isTransientAPIError(context.DeadlineExceeded))
+	assert.True(t, isTransientAPIError(fmt.Errorf("discovery: %w", &url.Error{
+		Op: "Get", URL: "https://172.30.0.1:443/api", Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded},
+	})))
 	assert.False(t, isTransientAPIError(k8serrors.NewForbidden(testAPIServerGR, "cluster", errors.New("x"))))
 	assert.False(t, isTransientAPIError(errors.New("some permanent error")))
 }

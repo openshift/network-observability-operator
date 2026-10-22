@@ -15,7 +15,7 @@ IMAGE_REGISTRY ?= quay.io
 REPO ?= $(IMAGE_REGISTRY)/$(IMAGE_ORG)
 
 # Component versions to use in bundle / release (do not use $VERSION for that)
-BUNDLE_VERSION ?= 2.0.0-community
+BUNDLE_VERSION ?= 2.0.1-community
 # console plugin
 export PLG_VERSION ?= v${BUNDLE_VERSION}
 # flowlogs-pipeline
@@ -543,7 +543,7 @@ ifneq ("$(BUNDLE_SET_DATE)", "true")
 	$(SED) -i 's/createdAt:.*/createdAt: ${BUNDLE_STORED_DATE}/' $(BUNDLE_OUT)/manifests/netobserv-operator.clusterserviceversion.yaml
 endif
 # CRD overrides
-	(shopt -s nullglob ; for file in $(BUNDLE_CONFIG)/crd-doc-override/*.yaml; do f="$$file" $(YQ) -i ".spec.versions[0].schema.openAPIV3Schema.properties *= load(env(f))" "$(BUNDLE_OUT)/manifests/$$(basename $$file)" ; done)
+	(shopt -s nullglob ; for file in $(BUNDLE_CONFIG)/crd-doc-override/*.yaml; do f="$$file" $(YQ) -i ".spec.versions[0].schema.openAPIV3Schema.properties *= load(env(f)) | ... head_comment=\"\"" "$(BUNDLE_OUT)/manifests/$$(basename $$file)" ; done)
 
 	sh -c '\
 	VALIDATION_OUTPUT=$$($(OPSDK) bundle validate $(BUNDLE_OUT) --select-optional suite=operatorframework); \

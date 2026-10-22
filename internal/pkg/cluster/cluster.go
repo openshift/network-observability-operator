@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -151,11 +152,11 @@ func retryStartupAPICall[T any](ctx context.Context, what string, retryable func
 	return result, err
 }
 
-// fetchAvailableAPIs runs the startup API discovery, retrying transient critical-API failures with
-// the shared bounded backoff.
+// fetchAvailableAPIs runs the startup API discovery, retrying transient critical-API failures
+// and complete discovery failures caused by temporary apiserver unavailability.
 func (c *Info) fetchAvailableAPIs(ctx context.Context) error {
 	_, err := retryStartupAPICall(ctx, "API discovery",
-		func(e error) bool { return errors.Is(e, errCriticalAPIDiscovery) },
+		func(e error) bool { return errors.Is(e, errCriticalAPIDiscovery) || isTransientAPIError(e) },
 		func(ctx context.Context) (struct{}, error) {
 			return struct{}{}, c.fetchAvailableAPIsInternal(ctx, false)
 		})
@@ -170,6 +171,7 @@ func isTransientAPIError(err error) bool {
 	if err == nil {
 		return false
 	}
+	var netErr net.Error
 	switch {
 	case k8serrors.IsServerTimeout(err),
 		k8serrors.IsTimeout(err),
@@ -183,6 +185,8 @@ func isTransientAPIError(err error) bool {
 	case utilnet.IsConnectionRefused(err),
 		utilnet.IsConnectionReset(err),
 		utilnet.IsProbableEOF(err):
+		return true
+	case errors.As(err, &netErr) && netErr.Timeout():
 		return true
 	default:
 		return false
