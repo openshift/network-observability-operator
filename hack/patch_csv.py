@@ -36,20 +36,10 @@ console_pf5_image = os.getenv('CONSOLE_PF5_IMAGE_PULLSPEC')
 LOKI_IMAGE_PULLSPEC = 'registry.redhat.io/openshift-logging/logging-loki-rhel9@sha256:6efd6e1fbc337c39a37cd52f1963ea61a33f0f9ab1220eeb5ecdd86b0ceb598f'
 
 csv['metadata']['annotations']['operators.openshift.io/valid-subscription'] = '["OpenShift Kubernetes Engine", "OpenShift Container Platform", "OpenShift Platform Plus"]'
-csv['metadata']['annotations']['operatorframework.io/cluster-monitoring'] = 'true'
 csv['metadata']['name'] = 'network-observability-operator.v{}'.format(version)
 csv['metadata']['annotations']['createdAt'] = created_at
 csv['metadata']['annotations']['containerImage'] = operator_image
-csv['metadata']['annotations']['features.operators.openshift.io/disconnected'] = 'true'
 csv['metadata']['annotations']['features.operators.openshift.io/fips-compliant'] = 'true'
-csv['metadata']['annotations']['features.operators.openshift.io/proxy-aware'] = 'false'
-csv['metadata']['annotations']['features.operators.openshift.io/tls-profiles'] = 'true'
-csv['metadata']['annotations']['features.operators.openshift.io/token-auth-aws'] = 'false'
-csv['metadata']['annotations']['features.operators.openshift.io/token-auth-azure'] = 'false'
-csv['metadata']['annotations']['features.operators.openshift.io/token-auth-gcp'] = 'false'
-csv['metadata']['annotations']['features.operators.openshift.io/cnf'] = 'false'
-csv['metadata']['annotations']['features.operators.openshift.io/cni'] = 'false'
-csv['metadata']['annotations']['features.operators.openshift.io/csi'] = 'false'
 
 # Add OpenShift Optional category
 csv['metadata']['annotations']['categories'] += ', OpenShift Optional'
