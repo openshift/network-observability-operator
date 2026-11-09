@@ -47,7 +47,7 @@ jobs:
           MULTIARCH_TARGETS="${WF_MULTIARCH_TARGETS}" IMAGE_ORG=${WF_ORG} IMAGE=${WF_REGISTRY}/${WF_IMAGE}:${tag} VERSION=${tag} CLEAN_BUILD=1 make image-build
 
       - name: docker login to quay.io
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           username: ${{ env.WF_REGISTRY_USER }}
           password: ${{ secrets.QUAY_SECRET }}
@@ -109,7 +109,7 @@ jobs:
           push-to-registry: true
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}@${{ env.digest }}
           format: 'spdx-json'
