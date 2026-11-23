@@ -38,7 +38,7 @@
         "enabled": false
       }
     ],
-    "ignorePaths": ["vendor/**"]
+    "ignorePaths": ["vendor/**", "integration-tests/**"]
   },
   "pip_requirements": {
     "packageRules": [
